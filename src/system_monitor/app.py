@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(argv)
-    app.setStyleSheet(styles.qss(1.0))
+    app.setStyleSheet(styles.qss(1.0, theme=cfg.get("ui", {}).get("theme", "dark")))
     app.setQuitOnLastWindowClosed(True)
 
     window = MainWindow(cfg)

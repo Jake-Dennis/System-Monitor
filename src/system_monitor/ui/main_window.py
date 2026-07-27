@@ -221,17 +221,19 @@ class MainWindow(QMainWindow):
         self._config = config
         self._scale = 1.0
         self._detached_windows: dict[str, DetachedWindow] = {}
+        self._appbar_active = True
+        self._config.setdefault("window", {})["appbar"] = True
         self.setWindowTitle("System Monitor")
         self.setObjectName("PanelRoot")
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-        if self._config.get("window", {}).get("always_on_top", True):
-            flags = flags | Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self._apply_size()
         self._build_ui()
         self._restore_position()
         self._install_shortcuts()
+        # Auto-register appbar on startup
+        QTimer.singleShot(500, lambda: self._register_appbar() or None)
         if self._config.get("window", {}).get("dock_side"):
             QTimer.singleShot(200, lambda: self._dock_to_side(
                 self._config["window"]["dock_side"], register_appbar=True
@@ -262,9 +264,10 @@ class MainWindow(QMainWindow):
         self._save_position()
         if self._taskbar_media is not None:
             self._taskbar_media.cleanup()
-        # Minimize to tray instead of closing
-        self.hide()
-        event.ignore()
+        # Actually quit the app (removes tray icon too)
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance().quit()
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -307,7 +310,7 @@ class MainWindow(QMainWindow):
 
         app = QApplication.instance()
         if app is not None:
-            app.setStyleSheet(styles.qss(scale))
+            app.setStyleSheet(styles.qss(scale, theme=self._config.get("ui", {}).get("theme", "dark")))
 
         self._header.setFixedHeight(round(34 * scale))
 
@@ -522,15 +525,6 @@ class MainWindow(QMainWindow):
         h = int(win.get("height", 980))
         self.resize(w, h)
 
-    def apply_always_on_top(self, on_top: bool) -> None:
-        flags = self.windowFlags()
-        if on_top:
-            flags = flags | Qt.WindowType.WindowStaysOnTopHint
-        else:
-            flags = flags & ~Qt.WindowType.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
-        self.show()
-
     def apply_opacity(self, opacity: float) -> None:
         self.setWindowOpacity(max(0.3, min(1.0, float(opacity))))
 
@@ -542,24 +536,11 @@ class MainWindow(QMainWindow):
     def _install_shortcuts(self) -> None:
         from PySide6.QtGui import QKeySequence, QShortcut
 
-        sc = QShortcut(QKeySequence("L"), self)
-        sc.activated.connect(self._toggle_lock)
-        sc = QShortcut(QKeySequence("T"), self)
-        sc.activated.connect(self._toggle_always_on_top)
         sc = QShortcut(QKeySequence("Ctrl+Q"), self)
         sc.activated.connect(self.close)
 
-    def _toggle_always_on_top(self) -> None:
-        win = self._config.setdefault("window", {})
-        win["always_on_top"] = not bool(win.get("always_on_top", True))
-        self.apply_always_on_top(bool(win["always_on_top"]))
-
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # type: ignore[override]
         menu = QMenu(self)
-        aot = QAction("Always on top", self, checkable=True)
-        aot.setChecked(bool(self._config.get("window", {}).get("always_on_top", True)))
-        aot.triggered.connect(self._toggle_always_on_top)
-        menu.addAction(aot)
 
         show_gpu = QAction("Show GPU", self, checkable=True)
         show_gpu.setChecked(bool(self._config.get("ui", {}).get("show_gpu", True)))
@@ -619,15 +600,16 @@ class MainWindow(QMainWindow):
                     geo = sg
                     break
 
-        w = self.width()
+        my_w = self.width()
+        my_h = self.height()
         if side == "left":
-            self.setGeometry(geo.left(), geo.top(), w, geo.height())
+            self.setGeometry(geo.left(), self.y(), my_w, my_h)
         elif side == "right":
-            self.setGeometry(geo.right() - w, geo.top(), w, geo.height())
+            self.setGeometry(geo.right() - my_w, self.y(), my_w, my_h)
         elif side == "top":
-            self.setGeometry(geo.left(), geo.top(), geo.width(), self.height())
+            self.setGeometry(self.x(), geo.top(), my_w, my_h)
         elif side == "bottom":
-            self.setGeometry(geo.left(), geo.bottom() - self.height(), geo.width(), self.height())
+            self.setGeometry(self.x(), geo.bottom() - my_h, my_w, my_h)
         self._config.setdefault("window", {})["dock_side"] = side
         self._save_position()
 
@@ -707,6 +689,161 @@ class MainWindow(QMainWindow):
                 )
             except Exception:
                 pass
+
+    # ----- appbar -----
+
+    _ABM_NEW = 0x00000000
+    _ABM_REMOVE = 0x00000001
+    _ABM_QUERYPOS = 0x00000002
+    _ABM_SETPOS = 0x00000003
+    _ABE_LEFT = 0
+    _ABE_TOP = 1
+    _ABE_RIGHT = 2
+    _ABE_BOTTOM = 3
+
+    def _register_appbar(self) -> None:
+        """Reserve screen edge space so maximized windows avoid this panel."""
+        from ctypes import wintypes, byref, sizeof, windll
+
+        class APPBARDATA(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("hWnd", wintypes.HWND),
+                ("uCallbackMessage", wintypes.UINT),
+                ("uEdge", wintypes.UINT),
+                ("rc", wintypes.RECT),
+                ("lParam", wintypes.LPARAM),
+            ]
+
+        try:
+            shell32 = windll.shell32
+            user32 = windll.user32
+            hwnd = wintypes.HWND(int(self.winId()))
+
+            # 1. Register
+            abd = APPBARDATA()
+            abd.cbSize = sizeof(APPBARDATA)
+            abd.hWnd = hwnd
+            abd.uCallbackMessage = 0
+            shell32.SHAppBarMessage(self._ABM_NEW, byref(abd))
+
+            # Find the screen the window is on
+            from PySide6.QtGui import QGuiApplication
+            from PySide6.QtCore import QPoint
+
+            screens = QGuiApplication.screens()
+            center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
+            geo = screens[0].geometry()
+            for s in screens:
+                sg = s.geometry()
+                if sg.contains(center):
+                    geo = sg
+                    break
+            win = self.frameGeometry()
+
+            # Nearest edge or saved edge
+            saved_edge = self._config.get("window", {}).get("appbar_edge")
+            if saved_edge is not None:
+                edge = saved_edge
+            else:
+                cx = win.x() + win.width() // 2
+                cy = win.y() + win.height() // 2
+                dl = abs(cx - geo.left())
+                dr = abs(cx - geo.right())
+                dt = abs(cy - geo.top())
+                db = abs(cy - geo.bottom())
+                edges = [(dl, self._ABE_LEFT), (dr, self._ABE_RIGHT),
+                         (dt, self._ABE_TOP), (db, self._ABE_BOTTOM)]
+                edges.sort()
+                edge = edges[0][1]
+
+            # 2. Build rect matching current window position (no stretching)
+            abd.uEdge = edge
+            win_left = win.x()
+            win_top = win.y()
+            win_w = win.width()
+            win_h = win.height()
+            if edge == self._ABE_LEFT:
+                abd.rc = wintypes.RECT(geo.left(), win_top, geo.left() + win_w, win_top + win_h)
+            elif edge == self._ABE_RIGHT:
+                abd.rc = wintypes.RECT(geo.right() - win_w, win_top, geo.right(), win_top + win_h)
+            elif edge == self._ABE_TOP:
+                abd.rc = wintypes.RECT(geo.left(), geo.top(), geo.right(), win_top + win_h)
+            else:  # ABE_BOTTOM
+                abd.rc = wintypes.RECT(geo.left(), geo.bottom() - win_h, geo.right(), win_top + win_h)
+
+            # 3. ABM_QUERYPOS — negotiate with shell
+            shell32.SHAppBarMessage(self._ABM_QUERYPOS, byref(abd))
+
+            # 4. Re-apply thickness (QUERYPOS only adjusts perpendicular axis)
+            if edge == self._ABE_LEFT:
+                abd.rc.right = abd.rc.left + win_w
+            elif edge == self._ABE_RIGHT:
+                abd.rc.left = abd.rc.right - win_w
+            elif edge == self._ABE_TOP:
+                abd.rc.bottom = abd.rc.top + win_h
+            else:  # ABE_BOTTOM
+                abd.rc.top = abd.rc.bottom - win_h
+
+            # 5. ABM_SETPOS — commit (this resizes window to edge — unavoidable)
+            shell32.SHAppBarMessage(self._ABM_SETPOS, byref(abd))
+
+            # 6. The user can resize back to preferred size; it's saved on close
+            self._config.setdefault("window", {})["appbar_edge"] = edge
+            self._appbar_active = True
+        except Exception:
+            self._appbar_active = False
+
+    def _unregister_appbar(self) -> None:
+        from ctypes import wintypes, byref, sizeof, windll
+
+        class APPBARDATA(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("hWnd", wintypes.HWND),
+                ("uCallbackMessage", wintypes.UINT),
+                ("uEdge", wintypes.UINT),
+                ("rc", wintypes.RECT),
+                ("lParam", wintypes.LPARAM),
+            ]
+
+        try:
+            shell32 = windll.shell32
+            abd = APPBARDATA()
+            abd.cbSize = sizeof(APPBARDATA)
+            abd.hWnd = wintypes.HWND(int(self.winId()))
+            shell32.SHAppBarMessage(self._ABM_REMOVE, byref(abd))
+        except Exception:
+            pass
+        self._appbar_active = False
+
+    def _toggle_appbar(self) -> None:
+        try:
+            if self._appbar_active:
+                self._unregister_appbar()
+                saved = self._config.get("window", {}).get("_pre_appbar", {})
+                if saved:
+                    self.setGeometry(saved["x"], saved["y"], saved["w"], saved["h"])
+            else:
+                # Also disable always-on-top (they conflict)
+                win_cfg = self._config.setdefault("window", {})
+                if win_cfg.get("always_on_top", False):
+                    win_cfg["always_on_top"] = False
+                    win_cfg["always_on_back"] = False
+                    flags = self.windowFlags()
+                    flags = flags & ~Qt.WindowType.WindowStaysOnTopHint
+                    flags = flags & ~Qt.WindowType.WindowStaysOnBottomHint
+                    self.setWindowFlags(flags)
+                    self.show()
+                geo = self.frameGeometry()
+                self._config.setdefault("window", {})["_pre_appbar"] = {
+                    "x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height()
+                }
+                self._register_appbar()
+            self._config.setdefault("window", {})["appbar"] = self._appbar_active
+            self._save_position()
+        except Exception:
+            self._appbar_active = False
 
     def _on_card_dropped(self, dragged: str, target: str) -> None:
         """Handle a card drag-and-drop: move `dragged` before `target`."""
@@ -847,16 +984,15 @@ class MainWindow(QMainWindow):
         lock_a.setChecked(bool(self._config.get("window", {}).get("locked", False)))
         lock_a.triggered.connect(self._toggle_lock)
 
-        menu.addSeparator()
-        aot_a = menu.addAction("Always on top")
-        aot_a.setCheckable(True)
-        aot_a.setChecked(bool(self._config.get("window", {}).get("always_on_top", True)))
-        aot_a.triggered.connect(self._toggle_always_on_top)
-
         autostart_a = menu.addAction("Run at Windows startup")
         autostart_a.setCheckable(True)
         autostart_a.setChecked(self._config.get("window", {}).get("autostart", False))
         autostart_a.triggered.connect(self._toggle_autostart)
+
+        theme_a = menu.addAction("Light theme")
+        theme_a.setCheckable(True)
+        theme_a.setChecked(self._config.get("ui", {}).get("theme", "dark") == "light")
+        theme_a.triggered.connect(self._toggle_theme)
 
         menu.addSeparator()
 
@@ -929,5 +1065,19 @@ class MainWindow(QMainWindow):
                 link.unlink(missing_ok=True)
             except Exception:
                 pass
+        self._save_position()
+
+    def _toggle_theme(self) -> None:
+        """Toggle between dark and light theme."""
+        from PySide6.QtWidgets import QApplication
+
+        ui = self._config.setdefault("ui", {})
+        current = ui.get("theme", "dark")
+        new_theme = "light" if current == "dark" else "dark"
+        ui["theme"] = new_theme
+
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(styles.qss(self._scale, theme=new_theme))
         self._save_position()
 
