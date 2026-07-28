@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QContextMenuEvent, QIcon, QMouseEvent, QMoveEvent, QResizeEvent
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QContextMenuEvent, QIcon, QMouseEvent, QMoveEvent, QPainter, QPaintEvent, QResizeEvent
 
 # Windows API types for nativeEvent
 try:
@@ -31,8 +31,9 @@ from PySide6.QtWidgets import (
 )
 
 from . import styles
+from .widgets._base import _Card
 from .widgets.cpu_widget import CpuCard
-from .widgets.disk_widget import DiskCard
+from .widgets.disk_widget import SingleDiskCard
 from .widgets.gpu_widget import GpuCard
 from .widgets.media_widget import MediaCard
 from .widgets.net_widget import NetCard
@@ -43,12 +44,23 @@ from .taskbar_media import ID_NEXT, ID_PLAY, ID_PREV, THBN_CLICKED, TaskbarMedia
 # Ordered list of (name, attr, config_key) for card management
 _CARD_DEFS = [
     ("CPU", "_cpu", "show_cpu"),
-    ("Memory", "_ram", "show_memory"),
     ("GPU", "_gpu", "show_gpu"),
+    ("Memory", "_ram", "show_memory"),
     ("Network", "_net", "show_network"),
-    ("Disk", "_disk", "show_disk"),
     ("Now Playing", "_media", "show_now_playing"),
 ]
+
+
+class _DropIndicator(QWidget):
+    """Thin colored line shown between cards during drag to show insert position."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(3)
+        self.hide()
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#00D4FF"))
 
 
 class DetachedWindow(QMainWindow):
@@ -230,34 +242,107 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self._apply_size()
         self._build_ui()
-        self._restore_position()
+        # Position and dock are applied after show() via timer — move()
+        # before show() gets overridden by the window manager.
         self._install_shortcuts()
-        # Auto-register appbar on startup
-        QTimer.singleShot(500, lambda: self._register_appbar() or None)
-        if self._config.get("window", {}).get("dock_side"):
-            QTimer.singleShot(200, lambda: self._dock_to_side(
-                self._config["window"]["dock_side"], register_appbar=True
-            ))
+        # Install app-level drag manager (handles DnD for all cards)
+        from .drag_manager import CardDragManager
+        self._drag_mgr = CardDragManager()
+        self._drag_mgr.card_dropped.connect(self._on_card_dropped)
+        self._drag_mgr.set_locked(bool(self._config.get("window", {}).get("locked", False)))
+        QTimer.singleShot(0, self._init_position)
 
-    # ----- public API -----
+    def _card_for_name(self, name: str) -> QWidget | None:
+        """Look up a card widget by display name — handles both static
+        _CARD_DEFS cards and dynamic disk cards."""
+        attr = _card_attr(name)
+        if attr:
+            return getattr(self, attr, None)
+        return self._disk_cards.get(name)
 
     def apply_snapshot(self, snap: dict[str, Any]) -> None:
-        """Hand a new system snapshot to every card. Cheap enough to call
-        from the Qt main thread at the collector's tick rate."""
+        """Hand a new system snapshot to every card."""
         if not snap:
             return
         self._cpu.update(snap)
         self._ram.update(snap)
-        self._disk.update(snap)
+        self._reconcile_disk_cards(snap)
         self._net.update(snap)
         self._media.update(snap)
         if self._config.get("ui", {}).get("show_gpu", True):
             self._gpu.update(snap)
         # Update detached cards too
         for name, dw in list(self._detached_windows.items()):
+            # Detached disk cards are stored as "C:" etc.
+            if name in self._disk_cards:
+                self._disk_cards[name].set_disk(
+                    io_percent=dw._io_percent,
+                    read_mb_s=dw._read_mb_s,
+                    write_mb_s=dw._write_mb_s,
+                )
+                continue
             card = getattr(self, _card_attr(name), None)
             if card is not None:
                 card.update(snap)
+
+    def _reconcile_disk_cards(self, snap: dict[str, Any]) -> None:
+        """Create/remove SingleDiskCard widgets as drives change."""
+        disk = snap.get("disks", {})
+        per_disk: list[dict] = disk.get("per_disk", []) or []
+        current_labels = {d.get("label", "") for d in per_disk}
+        outer = self.centralWidget().layout()
+        if outer is None:
+            return
+
+        # Ensure card_order includes all current disk labels
+        order = self._config.setdefault("ui", {}).get("card_order")
+        if not order:
+            order = [n for n, _, _ in _CARD_DEFS]
+        # Remove stale disk labels from order
+        order[:] = [n for n in order if n not in self._disk_cards or n in current_labels]
+
+        # Remove cards for drives that no longer exist
+        for label in list(self._disk_cards.keys()):
+            if label not in current_labels:
+                card = self._disk_cards.pop(label)
+                outer.removeWidget(card)
+                card.hide()
+                card.deleteLater()
+                if label in order:
+                    order.remove(label)
+
+        # Add/update cards for current drives
+        for d in per_disk:
+            label = d.get("label", "")
+            if not label:
+                continue
+            if label not in self._disk_cards:
+                card = SingleDiskCard(label)
+                self._disk_cards[label] = card
+                # Find insertion position from card_order
+                if label in order:
+                    pos_in_order = order.index(label)
+                    # Map order position to layout index (skip header)
+                    layout_idx = 1  # after header
+                    for name in order[:pos_in_order]:
+                        if name in self._disk_cards or _card_attr(name):
+                            layout_idx += 1
+                    outer.insertWidget(layout_idx, card, 1)
+                else:
+                    order.append(label)
+                    # Insert before the drop indicator (not at the very end)
+                    indicator_idx = outer.indexOf(self._drop_indicator)
+                    if indicator_idx >= 0:
+                        outer.insertWidget(indicator_idx, card, 1)
+                    else:
+                        outer.addWidget(card, 1)
+            else:
+                card = self._disk_cards[label]
+                card.set_disk(
+                    io_percent=float(d.get("io_percent", 0.0)),
+                    read_mb_s=float(d.get("read_mb_s", 0.0)),
+                    write_mb_s=float(d.get("write_mb_s", 0.0)),
+                )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         self._save_detached_state()
@@ -272,6 +357,11 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event: QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._apply_scale()
+        self._save_position()
+
+    def moveEvent(self, event: QMoveEvent) -> None:  # type: ignore[override]
+        super().moveEvent(event)
+        self._save_position()
 
     # ----- scaling -----
 
@@ -425,6 +515,12 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root.setObjectName("PanelRoot")
+        root.setAcceptDrops(True)
+        # Wire container-level drop handling (drag enter/move/leave/drop)
+        root.dragEnterEvent = self._container_drag_enter  # type: ignore[assignment]
+        root.dragMoveEvent = self._container_drag_move  # type: ignore[assignment]
+        root.dragLeaveEvent = self._container_drag_leave  # type: ignore[assignment]
+        root.dropEvent = self._container_drop  # type: ignore[assignment]
         outer = QVBoxLayout(root)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
@@ -441,23 +537,17 @@ class MainWindow(QMainWindow):
 
         self._cpu = CpuCard()
         self._ram = RamCard()
-        self._disk = DiskCard()
+        self._disk_cards: dict[str, SingleDiskCard] = {}
         self._net = NetCard()
         self._gpu = GpuCard()
         self._media = MediaCard()
-
-        # Wire drag-and-drop reordering
-        for name, attr, _ in _CARD_DEFS:
-            card = getattr(self, attr, None)
-            if card is not None:
-                card.card_dropped.connect(self._on_card_dropped)
 
         # Apply saved card order, falling back to _CARD_DEFS order.
         order = self._config.get("ui", {}).get("card_order")
         if not order:
             order = [n for n, _, _ in _CARD_DEFS]
         for name in order:
-            card = getattr(self, _card_attr(name), None)
+            card = self._card_for_name(name)
             if card is not None:
                 outer.addWidget(card, 1)
 
@@ -475,8 +565,17 @@ class MainWindow(QMainWindow):
         except Exception:
             self._taskbar_media = None
 
-        # Resize grip at bottom-right
-        grip = QSizeGrip(self)
+        self._drop_indicator = _DropIndicator()
+        outer.addWidget(self._drop_indicator)
+
+        self.setCentralWidget(root)
+
+        # Scale to match the initial window size.
+        self._apply_scale()
+        self.setMinimumSize(QSize(380, 600))
+
+        # Resize grip at bottom-right — inserted before drop indicator.
+        grip = QSizeGrip(root)
         grip.setStyleSheet(
             "QSizeGrip { width: 12px; height: 12px; "
             "background: rgba(255,255,255,30); "
@@ -485,16 +584,12 @@ class MainWindow(QMainWindow):
         grip.setToolTip("Drag to resize")
         outer.addWidget(grip, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
-        self.setCentralWidget(root)
-
-        # Scale to match the initial window size.
-        self._apply_scale()
-        self.setMinimumSize(QSize(380, 600))
-
         # Restore any detached windows from last session.
         self._restore_detached_state()
 
-    def _restore_position(self) -> None:
+    def _init_position(self) -> None:
+        """Restore last position and optionally dock+register appbar.
+        Called via QTimer after show() so move() isn't overridden."""
         win = self._config.get("window", {})
         x = win.get("x")
         y = win.get("y")
@@ -502,11 +597,14 @@ class MainWindow(QMainWindow):
             self.move(int(x), int(y))
         else:
             from PySide6.QtWidgets import QApplication
-
             screen = QApplication.primaryScreen()
             if screen is not None:
                 geo = screen.availableGeometry()
                 self.move(geo.right() - self.width() - 24, geo.top() + 48)
+        # Restore docked position + register appbar
+        dock_side = win.get("dock_side")
+        if dock_side:
+            QTimer.singleShot(100, lambda: self._dock_to_side(dock_side, register_appbar=True))
 
     def _save_position(self) -> None:
         geo = self.frameGeometry()
@@ -532,6 +630,7 @@ class MainWindow(QMainWindow):
         win = self._config.setdefault("window", {})
         win["locked"] = not bool(win.get("locked", False))
         self._header.set_locked(bool(win["locked"]))
+        self._drag_mgr.set_locked(bool(win["locked"]))
 
     def _install_shortcuts(self) -> None:
         from PySide6.QtGui import QKeySequence, QShortcut
@@ -633,15 +732,19 @@ class MainWindow(QMainWindow):
                 hwnd = wintypes.HWND(int(self.winId()))
                 geom = self.frameGeometry()
 
+                # Save original size BEFORE appbar stretches it
+                orig_w = geom.width()
+                orig_h = geom.height()
+
                 # Map side name to ABE constant
                 edge_map = {"left": 0, "top": 1, "right": 2, "bottom": 3}
                 edge = edge_map[side]
 
-                # 1. ABM_NEW - register
+                # 1. ABM_NEW - register with real callback message
                 abd = APPBARDATA()
                 abd.cbSize = sizeof(APPBARDATA)
                 abd.hWnd = hwnd
-                abd.uCallbackMessage = 0
+                abd.uCallbackMessage = windll.user32.RegisterWindowMessageW("SM_AppBarNotify")
                 shell32.SHAppBarMessage(0, byref(abd))  # ABM_NEW
 
                 # 2. Build RECT using absolute virtual screen coordinates
@@ -679,13 +782,15 @@ class MainWindow(QMainWindow):
                 # 5. ABM_SETPOS - commit the rect
                 shell32.SHAppBarMessage(3, byref(abd))  # ABM_SETPOS
 
-                # 6. MoveWindow to the approved position
+                # 6. Position window at the rect, restore original size
+                bar_w = orig_w if edge in (0, 2) else abd.rc.right - abd.rc.left
+                bar_h = abd.rc.bottom - abd.rc.top if edge in (0, 2) else orig_h
                 user32.SetWindowPos(
                     hwnd, 0,
-                    abd.rc.left, abd.rc.top,
-                    abd.rc.right - abd.rc.left,
-                    abd.rc.bottom - abd.rc.top,
-                    0x0004,  # SWP_NOZORDER | SWP_NOACTIVATE
+                    abd.rc.left if edge == 0 else abd.rc.right - bar_w,
+                    abd.rc.top if edge in (0, 2) else abd.rc.bottom - bar_h,
+                    bar_w, bar_h,
+                    0x0004 | 0x0010,  # SWP_NOZORDER | SWP_NOACTIVATE
                 )
             except Exception:
                 pass
@@ -720,11 +825,11 @@ class MainWindow(QMainWindow):
             user32 = windll.user32
             hwnd = wintypes.HWND(int(self.winId()))
 
-            # 1. Register
+            # 1. Register with real callback message
             abd = APPBARDATA()
             abd.cbSize = sizeof(APPBARDATA)
             abd.hWnd = hwnd
-            abd.uCallbackMessage = 0
+            abd.uCallbackMessage = windll.user32.RegisterWindowMessageW("SM_AppBarNotify")
             shell32.SHAppBarMessage(self._ABM_NEW, byref(abd))
 
             # Find the screen the window is on
@@ -845,41 +950,39 @@ class MainWindow(QMainWindow):
         except Exception:
             self._appbar_active = False
 
-    def _on_card_dropped(self, dragged: str, target: str) -> None:
-        """Handle a card drag-and-drop: move `dragged` before `target`."""
+    def _on_card_dropped(self, dragged_name: str, target_name: str, target_idx: int) -> None:
+        """Handle a card drag-and-drop: move dragged to target position."""
         ui = self._config.setdefault("ui", {})
         order = ui.get("card_order")
         if not order:
-            order = [n for n, _, _ in _CARD_DEFS]
-        if dragged not in order or target not in order:
+            order = [n for n, _, _ in _CARD_DEFS] + list(self._disk_cards.keys())
+
+        if dragged_name not in order:
             return
-        order.remove(dragged)
-        idx = order.index(target)
-        order.insert(idx, dragged)
+
+        # Update the order list
+        order.remove(dragged_name)
+        if target_name in order:
+            new_idx = order.index(target_name)
+        else:
+            new_idx = len(order)
+        order.insert(new_idx, dragged_name)
         ui["card_order"] = order
 
+        # Move widget in layout — single insertWidget call, O(1)
         outer = self.centralWidget().layout()
-        if outer is None:
-            return
-        cards_in_layout = set()
-        for i in range(outer.count() - 1, -1, -1):
-            item = outer.itemAt(i)
-            w = item.widget() if item is not None else None
-            if w is not None and w is not self._header and not isinstance(w, QSizeGrip):
-                outer.removeWidget(w)
-                cards_in_layout.add(w)
-        for n in order:
-            card = getattr(self, _card_attr(n), None)
-            if card is not None and card in cards_in_layout:
-                outer.addWidget(card, 1)
+        if outer is not None:
+            dragged_card = self._card_for_name(dragged_name)
+            if dragged_card is not None:
+                outer.insertWidget(target_idx, dragged_card)
         self._save_position()
 
     def _move_card(self, name: str, direction: int) -> None:
-        """Move a card up (-1) or down (+1) in the layout order."""
+        """Move a card up (-1) or down (+1) via context menu."""
         ui = self._config.setdefault("ui", {})
         order = ui.get("card_order")
         if not order:
-            order = [n for n, _, _ in _CARD_DEFS]
+            order = [n for n, _, _ in _CARD_DEFS] + list(self._disk_cards.keys())
         idx = order.index(name)
         new_idx = idx + direction
         if new_idx < 0 or new_idx >= len(order):
@@ -887,23 +990,79 @@ class MainWindow(QMainWindow):
         order.insert(new_idx, order.pop(idx))
         ui["card_order"] = order
 
+        # Move widget in layout — single insertWidget call
+        outer = self.centralWidget().layout()
+        if outer is not None:
+            card = self._card_for_name(name)
+            if card is not None:
+                outer.insertWidget(new_idx, card)
+        self._config.setdefault("window", {})["needs_save"] = True
+
+    # ----- container-level drop handling -----
+
+    def _container_drag_enter(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+            self._show_drop_indicator(event)
+
+    def _container_drag_move(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+            self._move_drop_indicator(event)
+
+    def _container_drag_leave(self, event):
+        self._hide_drop_indicator()
+
+    def _container_drop(self, event):
+        self._hide_drop_indicator()
+        dragged_name = event.mimeData().text()
         outer = self.centralWidget().layout()
         if outer is None:
             return
-        # Collect cards currently in the layout
-        cards_in_layout = set()
-        for i in range(outer.count() - 1, -1, -1):
+        target_idx = self._find_drop_index(event.position().toPoint())
+        target_name = self._name_at_layout_index(target_idx)
+        self._drag_mgr.card_dropped.emit(dragged_name, target_name or "", target_idx)
+        event.acceptProposedAction()
+
+    def _find_drop_index(self, pos: QPoint) -> int:
+        outer = self.centralWidget().layout()
+        if outer is None:
+            return 0
+        for i in range(outer.count()):
             item = outer.itemAt(i)
             w = item.widget() if item is not None else None
-            if w is not None and w is not self._header and not isinstance(w, QSizeGrip):
-                outer.removeWidget(w)
-                cards_in_layout.add(w)
-        # Re-add in new order
-        for n in order:
-            card = getattr(self, _card_attr(n), None)
-            if card is not None and card in cards_in_layout:
-                outer.addWidget(card, 1)
-        self._config.setdefault("window", {})["needs_save"] = True
+            if w is None or w is self._drop_indicator or not w.isVisible():
+                continue
+            mid_y = w.y() + w.height() // 2
+            if pos.y() < mid_y:
+                return i
+        return outer.count()
+
+    def _name_at_layout_index(self, idx: int) -> str | None:
+        outer = self.centralWidget().layout()
+        if outer is None:
+            return None
+        item = outer.itemAt(idx)
+        w = item.widget() if item is not None else None
+        if isinstance(w, _Card):
+            return w.card_title()
+        return None
+
+    def _show_drop_indicator(self, event):
+        idx = self._find_drop_index(event.position().toPoint())
+        outer = self.centralWidget().layout()
+        if outer is not None:
+            outer.insertWidget(idx, self._drop_indicator)
+            self._drop_indicator.show()
+
+    def _move_drop_indicator(self, event):
+        idx = self._find_drop_index(event.position().toPoint())
+        outer = self.centralWidget().layout()
+        if outer is not None:
+            outer.insertWidget(idx, self._drop_indicator)
+
+    def _hide_drop_indicator(self):
+        self._drop_indicator.hide()
 
     def _open_settings_menu(self) -> None:
         """Show a menu to toggle each card's visibility and detach."""
@@ -961,17 +1120,17 @@ class MainWindow(QMainWindow):
                             card.hidden_gpus.add(cn) if not checked else card.hidden_gpus.discard(cn)
                         )
                     )
-            if name == "Disk" and hasattr(card, "visible_disk_list"):
-                sub.addSeparator()
-                for disk_label in card.visible_disk_list:
-                    da = sub.addAction(f"Drive {disk_label}")
-                    da.setCheckable(True)
-                    da.setChecked(disk_label not in card.hidden_disks)
-                    da.triggered.connect(
-                        lambda checked, dl=disk_label: (
-                            card.hidden_disks.add(dl) if not checked else card.hidden_disks.discard(dl)
-                        )
-                    )
+
+        # Disk drives section
+        if self._disk_cards:
+            disk_menu = menu.addMenu("Drives")
+            for label in sorted(self._disk_cards.keys()):
+                da = disk_menu.addAction(f"Drive {label}")
+                da.setCheckable(True)
+                da.setChecked(self._disk_cards[label].isVisible())
+                da.triggered.connect(
+                    lambda checked, lbl=label: self._disk_cards[lbl].setVisible(checked)
+                )
 
         menu.addSeparator()
         swap_a = menu.addAction("Show swap")

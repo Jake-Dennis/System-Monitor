@@ -12,7 +12,7 @@ DEFAULTS: dict[str, Any] = {
     "window": {
         "x": None,
         "y": None,
-        "width": 480,
+        "width": 380,
         "height": 980,
         "always_on_top": True,
         "opacity": 1.0,

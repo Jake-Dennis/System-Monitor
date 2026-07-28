@@ -65,23 +65,6 @@ class NetCard(_Card):
         row.addWidget(self._up_label)
         body.addLayout(row)
 
-        # Utilization bar (like Task Manager)
-        util_row = QHBoxLayout()
-        util_row.setContentsMargins(0, 0, 0, 0)
-        util_row.setSpacing(8)
-        self._util_bar = QProgressBar()
-        self._util_bar.setRange(0, 100)
-        self._util_bar.setValue(0)
-        self._util_bar.setTextVisible(False)
-        self._util_bar.setFixedHeight(6)
-        self._util_pct = QLabel("--")
-        self._util_pct.setObjectName("ValueSmall")
-        self._util_pct.setFixedWidth(50)
-        self._util_pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        util_row.addWidget(self._util_bar, 1)
-        util_row.addWidget(self._util_pct)
-        body.addLayout(util_row)
-
         # Row: two timelines side by side
         tl_row = QHBoxLayout()
         tl_row.setContentsMargins(0, 0, 0, 0)
@@ -118,17 +101,6 @@ class NetCard(_Card):
         uv, uu = _fmt_rate(up)
         self._down_label.setText(chr(8595) + "  " + dv + " " + du)
         self._up_label.setText(chr(8593) + "  " + uv + " " + uu)
-
-        # Utilization bar
-        util = float(net.get("util_percent", 0.0))
-        color = styles.color_for_percent(util)
-        self._util_bar.setValue(int(round(min(100, util))))
-        self._util_bar.setStyleSheet(
-            "QProgressBar { background: rgba(0,0,0,80); border: none; "
-            "height: 6px; border-radius: 3px; }"
-            f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
-        )
-        self._util_pct.setText(f"{util:.1f}%")
 
         self._down_timeline.add_point(down / 1024)  # MB/s for timeline range
         self._up_timeline.add_point(up / 1024)      # MB/s for timeline range

@@ -4,14 +4,14 @@ Each metric card exposes `update(snapshot_slice)` and renders a title,
 primary value, and a colored progress bar. Subclasses customize the
 mapping from snapshot to display values.
 
-Cards support drag-and-drop reordering via the `card_dropped` signal.
+Card drag-and-drop is handled by CardDragManager (drag_manager.py).
 """
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QMimeData, Qt, Signal
-from PySide6.QtGui import QDrag, QEnterEvent, QMouseEvent, QPixmap
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QEnterEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -25,9 +25,7 @@ from .. import styles
 
 
 class _Card(QFrame):
-    """Base card widget. Draggable for reordering."""
-
-    card_dropped = Signal(str, str)  # dragged_card_title, target_card_title
+    """Base card widget. No DnD code — managed by CardDragManager."""
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -35,7 +33,6 @@ class _Card(QFrame):
         self.setObjectName("Card")
         self.setProperty("hovered", False)
         self.setMinimumHeight(60)
-        self.setAcceptDrops(True)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 16)
@@ -62,45 +59,9 @@ class _Card(QFrame):
         outer.addWidget(self._bar)
         outer.addWidget(self._secondary)
 
-    # ----- drag source -----
-
-    def mousePressEvent(self, event: QMouseEvent | None) -> None:  # type: ignore[override]
-        if event is not None:
-            self._drag_start = event.position().toPoint()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent | None) -> None:  # type: ignore[override]
-        if event is not None and hasattr(self, "_drag_start"):
-            if (event.position().toPoint() - self._drag_start).manhattanLength() < 10:
-                super().mouseMoveEvent(event)
-                return
-            drag = QDrag(self)
-            mime = QMimeData()
-            mime.setText(self._card_title)
-            drag.setMimeData(mime)
-            # Create a semi-transparent drag pixmap
-            pix = self.grab()
-            pix = pix.scaled(pix.width(), pix.height(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            drag.setPixmap(pix)
-            drag.setHotSpot(event.position().toPoint())
-            drag.exec(Qt.DropAction.MoveAction)
-        super().mouseMoveEvent(event)
-
-    # ----- drop target -----
-
-    def dragEnterEvent(self, event) -> None:  # type: ignore[override]
-        if event.mimeData().hasText():
-            event.acceptProposedAction()
-
-    def dragMoveEvent(self, event) -> None:  # type: ignore[override]
-        if event.mimeData().hasText():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event) -> None:  # type: ignore[override]
-        dragged = event.mimeData().text()
-        if dragged and dragged != self._card_title:
-            self.card_dropped.emit(dragged, self._card_title)
-        event.acceptProposedAction()
+    def card_title(self) -> str:
+        """Return the card title used as drag MIME data."""
+        return self._card_title
 
     # ----- hover -----
 

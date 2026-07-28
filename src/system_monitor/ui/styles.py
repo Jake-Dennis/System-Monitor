@@ -152,6 +152,7 @@ QProgressBar {{
     height: {h_bar};
     border-radius: 3px;
     text-align: center;
+    color: {TXT_P};
 }}
 QProgressBar::chunk {{
     border-radius: 3px;

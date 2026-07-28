@@ -1,150 +1,90 @@
-"""Disk IO card. Per-disk bar + rates, single aggregate timeline."""
+"""Per-disk IO card — one instance per physical drive."""
 from __future__ import annotations
 
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
 
 from .. import styles
 from ._base import _Card
 from ._timeline import Timeline
 
 
-class _DiskRow(QWidget):
-    """One disk volume: `C  [====bar====]  73%   R 5.9  |  W 0.2` with compact timeline."""
+class SingleDiskCard(_Card):
+    """A single disk drive shown as an independent card."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self, label: str, parent=None) -> None:
+        super().__init__(label, parent)
+        self.setMinimumHeight(0)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout = self.layout()  # type: ignore[arg-type]
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(2)
+        # Strip default _Card body, keep only title
+        for i in range(layout.count() - 1, -1, -1):
+            item = layout.itemAt(i)
+            w = item.widget() if item is not None else None
+            if w is not None and w is not self._title:
+                layout.removeWidget(w)
+                w.hide()
+                w.deleteLater()
 
-        # Row: label | bar | io_pct | R | W
-        h = QHBoxLayout()
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(8)
+        layout.setSpacing(4)
+        layout.setContentsMargins(18, 10, 18, 10)
 
-        self._label = QLabel("--")
-        self._label.setObjectName("CardTitle")
-        self._label.setFixedWidth(46)
-        self._label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
+        # R/W rates on the header line
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        self._read_label = QLabel("")
+        self._read_label.setObjectName("Secondary")
+        self._write_label = QLabel("")
+        self._write_label.setObjectName("Secondary")
+        hdr.addStretch()
+        hdr.addWidget(self._read_label)
+        hdr.addSpacing(4)
+        hdr.addWidget(self._write_label)
+        layout.addLayout(hdr)
+
+        # Bar row: percentage | bar
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, 0)
+        bar_row.setSpacing(6)
+
+        self._pct = QLabel("0%")
+        self._pct.setObjectName("ValueSmall")
+        self._pct.setFixedWidth(48)
+        self._pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self._bar = QProgressBar()
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
         self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(8)
+        self._bar.setFixedHeight(10)
 
-        self._pct = QLabel("--")
-        self._pct.setObjectName("ValueSmall")
-        self._pct.setFixedWidth(50)
-        self._pct.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        bar_row.addWidget(self._pct)
+        bar_row.addWidget(self._bar, 1)
+        layout.addLayout(bar_row)
 
-        self._read_label = QLabel("")
-        self._read_label.setObjectName("Secondary")
-        self._write_label = QLabel("")
-        self._write_label.setObjectName("Secondary")
-
-        h.addWidget(self._label)
-        h.addWidget(self._bar, 1)
-        h.addWidget(self._pct)
-        h.addSpacing(4)
-        h.addWidget(self._read_label)
-        h.addSpacing(2)
-        h.addWidget(self._write_label)
-        root.addLayout(h)
-
-        # Compact per-disk timeline
+        # Timeline
         self._timeline = Timeline()
         self._timeline.set_color(styles.ACCENT)
         self._timeline.setFixedHeight(30)
-        root.addWidget(self._timeline)
+        layout.addWidget(self._timeline)
 
-    def set_disk(
-        self, label: str, io_percent: float, read_mb_s: float, write_mb_s: float
-    ) -> None:
-        self._label.setText(label or "--")
-
+    def set_disk(self, io_percent: float, read_mb_s: float, write_mb_s: float) -> None:
         pct = float(max(0.0, min(100.0, io_percent)))
         self._bar.setValue(int(pct))
         color = styles.color_for_percent(pct)
         self._bar.setStyleSheet(
             "QProgressBar { background: rgba(0,0,0,80); border: none; "
-            "height: 8px; border-radius: 4px; }"
+            "height: 10px; border-radius: 4px; }"
             f"QProgressBar::chunk {{ background: {color}; border-radius: 4px; }}"
         )
         self._pct.setText(f"{pct:.0f}%")
-
         self._read_label.setText(f"R {read_mb_s:.1f}")
         self._write_label.setText(f"W {write_mb_s:.1f}")
-
         self._timeline.set_color(color)
         self._timeline.add_point(pct)
 
-
-class DiskCard(_Card):
-    def __init__(self, parent=None) -> None:
-        super().__init__("Disk", parent)
-        self._rows: list[_DiskRow] = []
-        self._rows_host: QWidget | None = None
-        self.hidden_disks: set[str] = set()
-        self.visible_disk_list: list[str] = []
-
-        layout = self.layout()  # type: ignore[arg-type]
-        # Remove default value label and bar from _Card.
-        for i in range(layout.count() - 1, -1, -1):
-            item = layout.itemAt(i)
-            w = item.widget() if item is not None else None
-            if w is not None and w.objectName() in ("Value", ""):
-                layout.removeWidget(w)
-                w.hide()
-                w.deleteLater()
-
-        # Container for disk rows (inserted right after the title).
-        self._rows_host = QWidget()
-        self._rows_layout = QVBoxLayout(self._rows_host)
-        self._rows_layout.setContentsMargins(0, 0, 0, 0)
-        self._rows_layout.setSpacing(6)
-        layout.insertWidget(1, self._rows_host)
-
     def update(self, snapshot: dict[str, Any]) -> None:
-        disk = snapshot.get("disks", {})
-        per_disk: list[dict] = disk.get("per_disk", []) or []
-
-        self.visible_disk_list = [d.get("label", "?") for d in per_disk]
-        hidden = self.hidden_disks
-        per_disk = [d for d in per_disk if d.get("label", "") not in hidden]
-
-        # Reconcile row count with disk count.
-        while len(self._rows) < len(per_disk):
-            row = _DiskRow()
-            self._rows.append(row)
-            self._rows_layout.addWidget(row)
-        while len(self._rows) > len(per_disk):
-            row = self._rows.pop()
-            self._rows_layout.removeWidget(row)
-            row.hide()
-            row.deleteLater()
-
-        if not per_disk:
-            placeholder = QLabel("No physical disks found")
-            placeholder.setObjectName("Secondary")
-            self._rows_layout.addWidget(placeholder)
-        else:
-            peak = 0.0
-            for row, d in zip(self._rows, per_disk):
-                io_pct = float(d.get("io_percent", 0.0))
-                peak = max(peak, io_pct)
-                row.set_disk(
-                    label=d.get("label", "") or "--",
-                    io_percent=io_pct,
-                    read_mb_s=float(d.get("read_mb_s", 0.0)),
-                    write_mb_s=float(d.get("write_mb_s", 0.0)),
-                )
-                row.show()
+        pass  # updated via set_disk
