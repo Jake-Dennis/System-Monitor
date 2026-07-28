@@ -203,6 +203,7 @@ class GpuCard(_Card):
 
         self._footer = QLabel("")
         self._footer.setObjectName("Secondary")
+        self._footer.hide()
         layout.addWidget(self._footer)
 
         self._rows: list[_GpuRow] = []
