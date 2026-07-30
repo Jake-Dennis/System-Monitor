@@ -24,5 +24,10 @@ if not exist ".venv\Scripts\python.exe" (
     )
 )
 
+REM Start LibreHardwareMonitor if available (for full GPU stats)
+if exist "librehardwaremonitor\LibreHardwareMonitor.exe" (
+    start "" "librehardwaremonitor\LibreHardwareMonitor.exe"
+)
+
 start "" ".venv\Scripts\pythonw.exe" run.py %*
 endlocal

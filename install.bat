@@ -1,51 +1,83 @@
 @echo off
-REM Installs Python dependencies for System Monitor into a local .venv.
-REM Idempotent — safe to re-run to update to the latest requirements.
-REM Run from this directory, or call from any shell. After this, run run.bat.
+REM One-time setup: creates venv, installs Python deps, downloads
+REM LibreHardwareMonitor for full GPU stats (AMD/Intel/NVIDIA).
+REM Run this once in the project root, then use run.bat to launch.
 
 setlocal
 cd /d "%~dp0"
 
-if not exist "requirements.txt" (
-    echo [install.bat] requirements.txt not found in %CD%.
-    exit /b 1
-)
+echo ========================================
+echo  System Monitor — Full Install
+echo ========================================
 
-if not defined PYTHON and not exist ".venv\Scripts\python.exe" (
-    set PYTHON=py -3.13
-)
-
-if not exist ".venv\Scripts\python.exe" (
-    echo [install.bat] No .venv found. Creating it with %PYTHON%...
-    %PYTHON% -m venv .venv
+REM --- Step 1: Python virtual environment ---
+if exist ".venv\Scripts\python.exe" (
+    echo [1/4] Virtual env already exists — skipping.
+) else (
+    echo [1/4] Creating Python virtual env...
+    py -3.13 -m venv .venv
     if errorlevel 1 (
-        echo [install.bat] Failed to create venv. Make sure Python 3.13 is available via "py -3.13" or set PYTHON=python.exe.
+        echo [!] Failed to create venv. Make sure "py -3.13" is available.
+        pause
         exit /b 1
     )
+)
+
+REM --- Step 2: Pip packages ---
+echo [2/4] Installing Python packages (may take a minute)...
+".venv\Scripts\python.exe" -m pip install --upgrade pip -q
+".venv\Scripts\python.exe" -m pip install -r requirements.txt
+if errorlevel 1 (
+    echo [!] pip install failed. Check your internet connection.
+    pause
+    exit /b 1
+)
+echo [2/4] Python packages installed.
+
+REM --- Step 3: LibreHardwareMonitor ---
+set LHM_DIR=librehardwaremonitor
+set LHM_EXE=%LHM_DIR%\LibreHardwareMonitor.exe
+if exist "%LHM_EXE%" (
+    echo [3/4] LibreHardwareMonitor already installed — skipping.
 ) else (
-    echo [install.bat] Reusing existing .venv.
+    echo [3/4] Downloading LibreHardwareMonitor (~50 MB)...
+    set LHM_ZIP=%LHM_DIR%.zip
+    set LHM_URL=https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest/download/LibreHardwareMonitor-net48.zip
+    where powershell >nul 2>&1
+    if errorlevel 1 (
+        echo [!] PowerShell required for download. Install it and retry.
+        pause
+        exit /b 1
+    )
+    powershell -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LHM_URL%' -OutFile '%LHM_ZIP%'"
+    if not exist "%LHM_ZIP%" (
+        echo [!] Download failed. Check your internet connection.
+        pause
+        exit /b 1
+    )
+    powershell -Command "Expand-Archive -Path '%LHM_ZIP%' -DestinationPath '%LHM_DIR%' -Force"
+    del "%LHM_ZIP%" 2>nul
+    if not exist "%LHM_EXE%" (
+        echo [!] Extraction failed.
+        pause
+        exit /b 1
+    )
+    echo [3/4] LibreHardwareMonitor downloaded to %LHM_DIR%\
 )
 
-call .venv\Scripts\activate.bat
-if errorlevel 1 (
-    echo [install.bat] Failed to activate .venv.
-    exit /b 1
-)
-
-echo [install.bat] Upgrading pip...
-python -m pip install --upgrade pip --quiet
-if errorlevel 1 (
-    echo [install.bat] pip upgrade failed.
-    exit /b 1
-)
-
-echo [install.bat] Installing requirements...
-python -m pip install -r requirements.txt
-if errorlevel 1 (
-    echo [install.bat] pip install failed. See output above.
-    exit /b 1
-)
-
+REM --- Step 4: Desktop shortcut (optional) ---
+echo [4/4] You can now launch the app with run.bat.
 echo.
-echo [install.bat] Done. To launch the app, run run.bat
+echo To get full GPU stats (Intel Iris Xe, AMD, etc.):
+echo   1. Right-click run.bat ^> "Run as administrator"
+echo      (or run LibreHardwareMonitor.exe as admin first)
+echo.
+echo Or add a startup shortcut:
+echo   - Press Win+R, type "shell:startup", press Enter
+echo   - Right-click %~dp0run.bat ^> Create shortcut
+echo   - Right-click the shortcut ^> Properties
+echo   - Click Advanced ^> tick "Run as administrator"
+echo.
+echo Done!
+pause
 endlocal
