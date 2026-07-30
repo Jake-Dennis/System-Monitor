@@ -330,10 +330,11 @@ class MainWindow(QMainWindow):
                     outer.insertWidget(layout_idx, card, 1)
                 else:
                     order.append(label)
-                    # Insert before the drop indicator (not at the very end)
-                    indicator_idx = outer.indexOf(self._drop_indicator)
-                    if indicator_idx >= 0:
-                        outer.insertWidget(indicator_idx, card, 1)
+                    # Insert before the Now Playing card (so drives > media)
+                    media_card = self._card_for_name("Now Playing")
+                    if media_card is not None:
+                        media_idx = outer.indexOf(media_card)
+                        outer.insertWidget(media_idx, card, 1)
                     else:
                         outer.addWidget(card, 1)
             else:
