@@ -65,19 +65,15 @@ if exist "%LHM_EXE%" (
     echo [3/4] LibreHardwareMonitor downloaded to %LHM_DIR%\
 )
 
-REM --- Step 4: Desktop shortcut (optional) ---
-echo [4/4] You can now launch the app with run.bat.
+REM --- Step 4: Launch LHM (needs admin for sensor access) ---
+echo [4/4] Launching LibreHardwareMonitor...
+echo  This may prompt for Administrator access — click Yes.
+powershell -Command "Start-Process -FilePath '%LHM_EXE%' -Verb RunAs"
+echo [4/4] LHM started. It runs in the background and tray.
 echo.
-echo To get full GPU stats (Intel Iris Xe, AMD, etc.):
-echo   1. Right-click run.bat ^> "Run as administrator"
-echo      (or run LibreHardwareMonitor.exe as admin first)
+echo Done! The app is ready. Launch it with run.bat.
 echo.
-echo Or add a startup shortcut:
-echo   - Press Win+R, type "shell:startup", press Enter
-echo   - Right-click %~dp0run.bat ^> Create shortcut
-echo   - Right-click the shortcut ^> Properties
-echo   - Click Advanced ^> tick "Run as administrator"
-echo.
-echo Done!
+echo NOTE: For GPU usage to appear, LHM must be running as Admin.
+echo run.bat starts it automatically if installed.
 pause
 endlocal
