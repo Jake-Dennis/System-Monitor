@@ -927,6 +927,8 @@ class MainWindow(QMainWindow):
         try:
             if self._appbar_active:
                 self._unregister_appbar()
+                # Clear dock_side so it doesn't re-dock on restart
+                self._config.setdefault("window", {})["dock_side"] = ""
                 saved = self._config.get("window", {}).get("_pre_appbar", {})
                 if saved:
                     self.setGeometry(saved["x"], saved["y"], saved["w"], saved["h"])
@@ -1162,6 +1164,9 @@ class MainWindow(QMainWindow):
             da.setCheckable(True)
             da.setChecked(self._config.get("window", {}).get("dock_side", "") == side)
             da.triggered.connect(lambda checked, s=side: self._dock_to_side(s, register_appbar=True))
+        dock_menu.addSeparator()
+        undock_a = dock_menu.addAction("Undock")
+        undock_a.triggered.connect(self._toggle_appbar)
 
         screen_menu = menu.addMenu("Screen")
         from PySide6.QtGui import QGuiApplication
