@@ -56,6 +56,11 @@ class LhmGpuReader:
                     out.append(gpu)
         return out
 
+    # LHM hardware identifier prefixes for CPUs. The vendor-dependent
+    # prefix is baked into the HardwareId (e.g. /amdcpu/0, /intelcpu/0,
+    # /genericcpu/0), NOT a generic /cpu/0.
+    _CPU_PREFIXES = ("amdcpu", "intelcpu", "genericcpu")
+
     def read_cpu_power_w(self) -> float | None:
         """Return CPU package power in watts, or None if unavailable."""
         if not self._ok:
@@ -63,29 +68,32 @@ class LhmGpuReader:
         data = self._fetch_tree()
         if data is None:
             return None
-        # LHM typically exposes CPU package power under /cpu/{idx}/ package,
-        # or on some systems under /main/power or /cpu/{idx}/clocks/power.
-        # Try a broad sweep: find any Power sensor in /cpu/ subtrees.
-        for idx in range(8):
-            prefix = f"/cpu/{idx}/"
-            node = self._find_node(data, prefix)
-            if node is None:
-                continue
-            # Depth-first search for Power sensors under this CPU node.
-            out: dict[str, Any] = {}
-            self._collect(node, prefix + "xxx", out)
-            # Fall back: if the node itself isn't matched by collect's startswith
-            # (which expects the prefix to match SensorId's full path), redo with
-            # a simpler descent that looks for Type == "Power".
-            result = self._find_power(node, prefix)
-            if result is not None:
-                return result
+        # LHM typically exposes CPU package power under /{vendor}cpu/{idx}/
+        # package, or on some systems under /main/power or
+        # /{vendor}cpu/{idx}/clocks/power. Try a broad sweep: find any Power
+        # sensor in the CPU subtrees.
+        for vendor in self._CPU_PREFIXES:
+            for idx in range(8):
+                prefix = f"/{vendor}/{idx}/"
+                node = self._find_node(data, prefix)
+                if node is None:
+                    continue
+                # Depth-first search for Power sensors under this CPU node.
+                out: dict[str, Any] = {}
+                self._collect(node, prefix + "xxx", out)
+                # Fall back: if the node itself isn't matched by collect's
+                # startswith (which expects the prefix to match SensorId's full
+                # path), redo with a simpler descent that looks for
+                # Type == "Power".
+                result = self._find_power(node, prefix)
+                if result is not None:
+                    return result
         return None
 
     def read_cpu_temp_c(self) -> float | None:
         """Return CPU package temperature in Celsius, or None if unavailable.
 
-        LHM exposes CPU temps under /cpu/{idx}/ (e.g. "CPU Package",
+        LHM exposes CPU temps under /{vendor}cpu/{idx}/ (e.g. "CPU Package",
         "Core Average", or per-core sensors). We return the hottest reading
         found so the badge reflects the worst case. Requires LHM running
         elevated (its own process); this reader itself needs no admin.
@@ -96,20 +104,22 @@ class LhmGpuReader:
         if data is None:
             return None
         hottest: float | None = None
-        for idx in range(8):
-            prefix = f"/cpu/{idx}/"
-            node = self._find_node(data, prefix)
-            if node is None:
-                continue
-            result = self._find_temperature(node, prefix)
-            if result is not None:
-                if hottest is None or result > hottest:
-                    hottest = result
+        for vendor in self._CPU_PREFIXES:
+            for idx in range(8):
+                prefix = f"/{vendor}/{idx}/"
+                node = self._find_node(data, prefix)
+                if node is None:
+                    continue
+                result = self._find_temperature(node, prefix)
+                if result is not None:
+                    if hottest is None or result > hottest:
+                        hottest = result
         return hottest
 
     @staticmethod
     def _find_temperature(node: dict, prefix: str) -> float | None:
         """Deep search under `node` for the hottest Temperature sensor."""
+        best: float | None = None
         sid = node.get("SensorId", "") or ""
         stype = node.get("Type", "") or ""
         if sid.startswith(prefix) and stype == "Temperature":
@@ -117,8 +127,7 @@ class LhmGpuReader:
             if value is not None:
                 num = _parse_number(value, suffix_strip="cC")
                 if num is not None:
-                    return num
-        best: float | None = None
+                    best = num
         for child in node.get("Children", []) or []:
             result = LhmGpuReader._find_temperature(child, prefix)
             if result is not None and (best is None or result > best):
@@ -176,9 +185,13 @@ class LhmGpuReader:
 
     @staticmethod
     def _find_node(node: dict, target_prefix: str) -> dict | None:
-        """Find the node whose SensorId equals `target_prefix` (no trailing slash)."""
+        """Find the node whose HardwareId or SensorId equals `target_prefix`
+        (no trailing slash). Hardware nodes expose `HardwareId`; sensor nodes
+        expose `SensorId`."""
+        hid = node.get("HardwareId", "") or ""
         sid = node.get("SensorId", "") or ""
-        if sid == target_prefix.rstrip("/"):
+        target = target_prefix.rstrip("/")
+        if hid == target or sid == target:
             return node
         for child in node.get("Children", []) or []:
             hit = LhmGpuReader._find_node(child, target_prefix)
