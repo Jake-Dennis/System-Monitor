@@ -49,7 +49,7 @@ if exist "tools\LibreHardwareMonitor\LibreHardwareMonitor.exe" (
         echo     unavailable, but all other features still work.
     ) else (
         echo [3/3] LibreHardwareMonitor installed to tools\LibreHardwareMonitor.
-        echo       Run run-lhm.bat to launch it with the monitor.
+        echo       run.bat starts it automatically.
     )
 )
 
@@ -60,7 +60,7 @@ echo GPU stats use built-in Windows Performance Counters
 echo (no external software required). All GPUs work out of the box.
 echo.
 echo For CPU temperature:
-echo   - Run run-lhm.bat (launches LibreHardwareMonitor as Admin + the monitor)
+echo   - Just run run.bat (it starts LibreHardwareMonitor automatically)
 echo   - In LibreHardwareMonitor, enable Options ^> Remote Web Server ^> Run
 echo     (one time - the setting is remembered).
 pause
