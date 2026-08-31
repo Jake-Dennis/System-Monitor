@@ -45,6 +45,13 @@ def _read_temps() -> dict[str, Any] | None:
                 continue
             # WMI gives tenths of Kelvin
             celsius = raw / 10.0 - 273.15
+            # Plausibility filter: ACPI thermal zones frequently report a
+            # fixed/bogus value (e.g. ~17°C on many AMD boards) that is NOT
+            # the real CPU temperature. Only accept readings in a sane
+            # operating range; anything else is treated as unavailable so we
+            # never display a misleading number.
+            if not (20.0 <= celsius <= 110.0):
+                continue
             name = z.InstanceName or "?"
             temps[name] = round(celsius, 1)
             if max_temp_c is None or celsius > max_temp_c:
