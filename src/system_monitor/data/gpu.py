@@ -1,5 +1,5 @@
-"""GPU stats: NVML for NVIDIA, LHM for everything (AMD/NVIDIA/Intel),
-DXGI for name + VRAM. Graceful fallback when only some sources respond.
+r"""GPU stats: NVML for NVIDIA, LHM for everything (AMD/NVIDIA/Intel),
+DXGI for name + VRAM, Windows PDH for fallback util/VRAM usage.
 
 Adapter list comes from DXGI (Win32_VideoController) so the card always
 knows the GPU's name, vendor, and total VRAM — even on systems where
@@ -8,7 +8,10 @@ NVML is missing and LHM is not running.
 Per-sensor enrichment order, applied per adapter:
   1. NVML (NVIDIA only, fastest, most complete)
   2. LHM (any vendor, fills gaps when NVML is absent or for AMD/Intel)
-  3. DXGI name + VRAM only if nothing else responds
+  3. Windows PDH (any vendor, no external deps — provides util/VRAM used
+     via `\GPU Engine(*)\Utilization Percentage` and
+     `\GPU Adapter Memory(*)\Dedicated Usage`)
+  4. DXGI name + VRAM only if nothing else responds
 """
 from __future__ import annotations
 
@@ -51,7 +54,11 @@ class GpuCollector:
     def __init__(self) -> None:
         self._adapters: list[dict[str, Any]] = []  # private metadata
         self._lhm: LhmGpuReader | None = None
+        self._pdh_query = None
+        self._pdh_util_counter = None
+        self._pdh_vram_counter = None
         self._init_sources()
+        self._init_pdh()
 
     # ----- public surface -----
 
@@ -93,6 +100,10 @@ class GpuCollector:
             if lhm_list:
                 self._enrich_lhm(entry, lhm_list.pop(0))
 
+            # 3. Windows PDH (any vendor — no external deps, always available)
+            if self._pdh_query is not None:
+                self._enrich_pdh(entry, idx)
+
             if entry["source"] == "none":
                 entry["source"] = "dxgi" if vram > 0 else "unavailable"
             out.append(entry)
@@ -131,14 +142,35 @@ class GpuCollector:
         for a in adapters:
             entry = {
                 "name": a["name"],
-                "vendor": a["vendor"],
-                "vram_mb": float(a.get("vram_mb") or 0.0),
+                "vendor": a["vendor"],                "vram_mb": float(a.get("vram_mb") or 0.0),
                 "_nvml_handle": None,
             }
             if a["vendor"] == "nvidia" and nvml_cursor < len(nvml_handles) and pynvml is not None:
                 entry["_nvml_handle"] = nvml_handles[nvml_cursor]
                 nvml_cursor += 1
             self._adapters.append(entry)
+
+    # ----- PDH setup -----
+
+    def _init_pdh(self) -> None:
+        """Open Windows Performance Counter queries for GPU util/VRAM.
+
+        No external deps needed — uses pywin32's win32pdh which is already
+        a required dep. Provides a fallback for systems where LHM isn't
+        installed but we still want GPU utilization data.
+        """
+        try:
+            import win32pdh  # type: ignore
+            self._pdh_query = win32pdh.OpenQuery()
+            self._pdh_util_counter = win32pdh.AddCounter(
+                self._pdh_query, r"\GPU Engine(*)\Utilization Percentage"
+            )
+            self._pdh_vram_counter = win32pdh.AddCounter(
+                self._pdh_query, r"\GPU Adapter Memory(*)\Dedicated Usage"
+            )
+        except Exception:
+            log.debug("PDH GPU counters unavailable", exc_info=True)
+            self._pdh_query = None
 
     # ----- enrichers -----
 
@@ -189,3 +221,61 @@ class GpuCollector:
             entry["source"] = "lhm"
         else:
             entry["source"] = f"{entry['source']}+lhm"
+
+    def _enrich_pdh(self, entry: dict[str, Any], adapter_idx: int) -> None:
+        """Fill util_percent and mem_used_mb from Windows PDH GPU counters.
+
+        Works on any GPU vendor (Intel, AMD, NVIDIA) without any external
+        software. Uses the GPU Engine utilization counter aggregated by
+        physical adapter index, and the GPU Adapter Memory counter for
+        VRAM used.
+        """
+        import re
+        try:
+            import win32pdh  # type: ignore
+            # Need two samples with a delay for GPU counters to populate.
+            win32pdh.CollectQueryData(self._pdh_query)
+            import time
+            time.sleep(0.3)
+            win32pdh.CollectQueryData(self._pdh_query)
+        except Exception:
+            return
+
+        # Aggregate GPU Engine utilization per physical adapter
+        try:
+            util_data = win32pdh.GetFormattedCounterArray(
+                self._pdh_util_counter, win32pdh.PDH_FMT_DOUBLE
+            )
+            util_per_adapter: dict[int, float] = {}
+            for name, val in util_data.items():
+                m = re.search(r"phys_(\d+)_", name)
+                if m:
+                    idx = int(m.group(1))
+                    # Use max since multiple engines could be active
+                    util_per_adapter[idx] = max(util_per_adapter.get(idx, 0.0), val)
+            if adapter_idx in util_per_adapter:
+                entry["util_percent"] = round(util_per_adapter[adapter_idx], 1)
+        except Exception:
+            log.debug("PDH GPU util read failed", exc_info=True)
+
+        # Read VRAM usage
+        try:
+            vram_data = win32pdh.GetFormattedCounterArray(
+                self._pdh_vram_counter, win32pdh.PDH_FMT_LARGE
+            )
+            for name, val in vram_data.items():
+                if f"phys_{adapter_idx}" in name:
+                    entry["mem_used_mb"] = round(val / 1024**2, 1)
+                    break
+        except Exception:
+            log.debug("PDH GPU VRAM read failed", exc_info=True)
+
+        # Recompute mem percent and tag source
+        if entry["mem_used_mb"] and entry["mem_total_mb"]:
+            entry["mem_percent"] = round(
+                100.0 * entry["mem_used_mb"] / entry["mem_total_mb"], 1
+            )
+        if entry["source"] == "none":
+            entry["source"] = "pdh"
+        elif "pdh" not in entry["source"]:
+            entry["source"] = f"{entry['source']}+pdh"
