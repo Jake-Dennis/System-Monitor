@@ -19,3 +19,5 @@ dist/
 
 # Local config overrides
 config.local.json
+librehardwaremonitor/
+graphify-out/
