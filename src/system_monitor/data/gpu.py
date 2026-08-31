@@ -208,6 +208,10 @@ class GpuCollector:
         except Exception:
             pass
         try:
+            entry["temp_c"] = int(pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU))
+        except Exception:
+            pass
+        try:
             entry["fan_percent"] = float(pynvml.nvmlDeviceGetFanSpeed(h))
         except Exception:
             pass

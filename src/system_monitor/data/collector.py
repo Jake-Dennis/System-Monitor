@@ -16,6 +16,7 @@ from . import disk as disk_mod
 from . import gpu as gpu_mod
 from . import memory as mem_mod
 from . import network as net_mod
+from .cpu_temp import CpuTempReader
 
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class Collector:
         self._thread: threading.Thread | None = None
         self._cpu = cpu_mod.CpuInfo()
         self._gpu = gpu_mod.GpuCollector()
+        self._cpu_temp = CpuTempReader()
         self._prev_disk: dict | None = None
         self._prev_net: dict | None = None
 
@@ -92,6 +94,10 @@ class Collector:
         cpu_power_w = self._gpu.read_cpu_power_w()
         if cpu_power_w is not None:
             cpu_stats["power_w"] = round(cpu_power_w, 1)
+
+        cpu_temp = self._cpu_temp.read()
+        if cpu_temp is not None:
+            cpu_stats["temp_c"] = cpu_temp["cpu_temp_c"]
 
         disk_stats = disk_mod.snapshot(self._prev_disk)
         self._prev_disk = disk_stats

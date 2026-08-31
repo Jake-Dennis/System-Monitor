@@ -71,6 +71,9 @@ class CpuCard(_Card):
             parts.append(f"({threads}T)")
         if freq:
             parts.append(f"{freq/1000:.2f} GHz")
+        temp = cpu.get("temp_c")
+        if temp is not None:
+            parts.append(f"{float(temp):.0f}°C")
         self._cpu_info.setText("CPU: " + " ".join(parts))
 
         self._strip.set_values(cpu.get("per_core", []), color)

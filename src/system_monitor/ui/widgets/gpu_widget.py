@@ -152,12 +152,15 @@ class _GpuRow(QWidget):
             self._vram_pct.setText("--")
             self._vram_bar.setValue(0)
 
-        # Detail line: power · fan · VRAM size
+        # Detail line: power · fan · VRAM size · temp
         parts: list[str] = []
         if mem_total > 0:
             parts.append(f"{mem_used:.0f}/{mem_total:.0f} MB")
         elif mem_total == 0 and mem_used == 0:
             parts.append("VRAM n/a")
+        temp = gpu.get("temp_c")
+        if temp is not None:
+            parts.append(f"{float(temp):.0f}°C")
         power = gpu.get("power_w")
         if power is not None:
             parts.append(f"{float(power):.0f} W")
