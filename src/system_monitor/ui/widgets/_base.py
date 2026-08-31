@@ -89,6 +89,19 @@ class _Card(QFrame):
             f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
         )
 
+    def _set_alert(self, percent: float, warn: float = 70.0, crit: float = 90.0) -> None:
+        """Apply alert state (none/warn/crit) based on percentage thresholds."""
+        if percent >= crit:
+            level = "crit"
+        elif percent >= warn:
+            level = "warn"
+        else:
+            level = "none"
+        if self.property("alert") != level:
+            self.setProperty("alert", level)
+            self.style().unpolish(self)
+            self.style().polish(self)
+
     def update(self, snapshot: Any) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 

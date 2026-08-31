@@ -64,8 +64,13 @@ def main(argv: list[str] | None = None) -> int:
     interval = float(cfg.get("collector", {}).get("interval_seconds", 1.0))
     collector = Collector(interval=interval)
 
+    # History recorder: writes snapshots to daily CSVs under %APPDATA%.
+    from .history import HistoryRecorder
+    history = HistoryRecorder()
+
     def _on_snap(snap: dict[str, Any]) -> None:
         bridge.post(snap)
+        history.record(snap)
 
     collector.on_snapshot(_on_snap)
     collector.start()
@@ -141,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def _on_exit() -> None:
         collector.stop()
+        history.stop()  # drains queue and exits writer thread
         config_mod.save(cfg)
         tray.hide()
 

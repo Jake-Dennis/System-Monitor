@@ -53,6 +53,7 @@ class CpuCard(_Card):
         color = styles.color_for_percent(pct)
         self._set_value(f"{pct:.0f} %")
         self._set_bar(pct, color)
+        self._set_alert(pct)
         self._bar_pct.setText(f"{pct:.0f}%")
 
         # Info line: CPU: (Model) (C/T) - GHz

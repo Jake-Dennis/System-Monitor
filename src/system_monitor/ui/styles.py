@@ -80,6 +80,14 @@ def qss(scale: float = 1.0, theme: str = "dark") -> str:
     else:
         PROGRESS_BG = "rgba(0, 0, 0, 15)"
 
+    # Alert border colors (warn = orange, crit = red)
+    if theme == "dark":
+        ALERT_WARN = "#FFB454"
+        ALERT_CRIT = "#FF3838"
+    else:
+        ALERT_WARN = "#CC8800"
+        ALERT_CRIT = "#CC2222"
+
     return f"""
 * {{ font-family: "Segoe UI Variable", "Segoe UI", "Inter", sans-serif; }}
 
@@ -134,6 +142,12 @@ QWidget#Card {{
 QWidget#Card[hovered="true"] {{
     background-color: {BG_CH};
     border: 1px solid {ACCENT};
+}}
+QWidget#Card[alert="warn"] {{
+    border: 2px solid {ALERT_WARN};
+}}
+QWidget#Card[alert="crit"] {{
+    border: 2px solid {ALERT_CRIT};
 }}
 
 QPushButton#IconButton {{

@@ -46,6 +46,7 @@ class RamCard(_Card):
         color = styles.color_for_percent(pct, hot_at=75.0, crit_at=92.0)
         self._set_value(f"{pct:.0f} %")
         self._set_bar(pct, color)
+        self._set_alert(pct, warn=75.0, crit=92.0)
         self._bar_pct.setText(f"{pct:.0f}%")
         used = float(mem.get("used_gb", 0.0))
         total = float(mem.get("total_gb", 0.0))

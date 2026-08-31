@@ -55,6 +55,7 @@ class GpuCollector:
         self._adapters: list[dict[str, Any]] = []  # private metadata
         self._lhm: LhmGpuReader | None = None
         self._pdh_query = None
+        self._pdh_primed = False
         self._pdh_util_counter = None
         self._pdh_vram_counter = None
         self._init_sources()
@@ -158,6 +159,10 @@ class GpuCollector:
         No external deps needed — uses pywin32's win32pdh which is already
         a required dep. Provides a fallback for systems where LHM isn't
         installed but we still want GPU utilization data.
+
+        PDH counters need two samples with a delay between them to
+        compute rates. We prime both samples during init so the first
+        snapshot returns real data immediately.
         """
         try:
             import win32pdh  # type: ignore
@@ -168,9 +173,17 @@ class GpuCollector:
             self._pdh_vram_counter = win32pdh.AddCounter(
                 self._pdh_query, r"\GPU Adapter Memory(*)\Dedicated Usage"
             )
+            # Prime: first collect is raw, second collect (after delay)
+            # produces rate-based values.
+            win32pdh.CollectQueryData(self._pdh_query)
+            import time as _time
+            _time.sleep(0.3)
+            win32pdh.CollectQueryData(self._pdh_query)
+            self._pdh_primed = True
         except Exception:
             log.debug("PDH GPU counters unavailable", exc_info=True)
             self._pdh_query = None
+            self._pdh_primed = False
 
     # ----- enrichers -----
 
@@ -229,14 +242,17 @@ class GpuCollector:
         software. Uses the GPU Engine utilization counter aggregated by
         physical adapter index, and the GPU Adapter Memory counter for
         VRAM used.
+
+        PDH rate counters need two samples. We collect a fresh sample
+        at every snapshot (async-friendly: no sleep). The next snapshot
+        gets the new rate based on (current - previous) / interval.
         """
         import re
         try:
             import win32pdh  # type: ignore
-            # Need two samples with a delay for GPU counters to populate.
-            win32pdh.CollectQueryData(self._pdh_query)
-            import time
-            time.sleep(0.3)
+            # Trigger a fresh collect (returns immediately, no sleep).
+            # The next call to GetFormattedCounterArray computes the
+            # rate between this sample and the previous one.
             win32pdh.CollectQueryData(self._pdh_query)
         except Exception:
             return

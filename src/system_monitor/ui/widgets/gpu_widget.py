@@ -132,6 +132,7 @@ class _GpuRow(QWidget):
             "height: 6px; border-radius: 3px; }"
             f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
         )
+        self._set_alert(util, warn=80.0, crit=95.0)
         source = gpu.get("source", "")
         self._source.setText("")
 
@@ -266,6 +267,13 @@ class GpuCard(_Card):
             for row, gpu in zip(self._rows, gpus):
                 row.set_gpu(gpu)
                 row.show()
+
+            # Card-level alert based on max GPU util across all rows
+            max_util = max(
+                (float(g.get("util_percent", 0.0)) for g in gpus),
+                default=0.0,
+            )
+            self._set_alert(max_util, warn=80.0, crit=95.0)
 
             # Footer: adapter count + source breakdown + combined power.
             sources: dict[str, int] = {}

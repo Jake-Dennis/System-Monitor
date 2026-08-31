@@ -84,6 +84,7 @@ class SingleDiskCard(_Card):
         self._read_label.setText(f"R {read_mb_s:.1f}")
         self._write_label.setText(f"W {write_mb_s:.1f}")
         self._timeline.set_color(color)
+        self._set_alert(pct, warn=80.0, crit=95.0)
         self._timeline.add_point(pct)
 
     def update(self, snapshot: dict[str, Any]) -> None:

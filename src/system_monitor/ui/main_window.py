@@ -1078,114 +1078,154 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
 
         for name, attr, cfg_key in _CARD_DEFS:
-            card = getattr(self, attr, None)
-            if card is None:
-                continue
-            sub = menu.addMenu(name)
-            vis_a = sub.addAction("Visible")
-            vis_a.setCheckable(True)
-            vis_a.setChecked(card.isVisible())
-            vis_a.triggered.connect(
-                lambda checked, n=name, c=card: (
-                    c.setVisible(checked),
-                    c.setVisible(checked) or self._config.setdefault("ui", {}).__setitem__(
-                        f"show_{n.lower().replace(' ', '_')}", checked
-                    ),
-                )
+            self._add_card_submenu(menu, name, attr, cfg_key)
+
+        self._add_drive_menu(menu)
+
+        menu.addSeparator()
+        self._add_toggle(menu, "Show swap",
+                          checked=self._config.get("ui", {}).get("show_swap", True),
+                          on_toggle=self._toggle_show_swap)
+        menu.addSeparator()
+        self._add_toggle(menu, "Lock position",
+                          checked=self._config.get("window", {}).get("locked", False),
+                          on_toggle=self._toggle_lock)
+        self._add_toggle(menu, "Run at Windows startup",
+                          checked=self._config.get("window", {}).get("autostart", False),
+                          on_toggle=self._toggle_autostart)
+        self._add_toggle(menu, "Light theme",
+                          checked=self._config.get("ui", {}).get("theme", "dark") == "light",
+                          on_toggle=self._toggle_theme)
+
+        menu.addSeparator()
+        self._add_dock_menu(menu)
+        self._add_screen_menu(menu)
+
+        global_pos = btn.mapToGlobal(QPoint(0, btn.height()))
+        menu.exec(global_pos)
+
+    def _add_toggle(self, menu: QMenu, label: str, *, checked: bool, on_toggle) -> None:
+        """Add a simple checkable action to the menu."""
+        a = menu.addAction(label)
+        a.setCheckable(True)
+        a.setChecked(bool(checked))
+        a.triggered.connect(on_toggle)
+
+    def _add_card_submenu(self, menu: QMenu, name: str, attr: str, cfg_key: str) -> None:
+        """Add a per-card submenu with visibility/detach/reorder."""
+        card = getattr(self, attr, None)
+        if card is None:
+            return
+        sub = menu.addMenu(name)
+
+        # Visible toggle
+        vis_a = sub.addAction("Visible")
+        vis_a.setCheckable(True)
+        vis_a.setChecked(card.isVisible())
+        vis_a.triggered.connect(
+            lambda checked, n=name, c=card: (
+                c.setVisible(checked),
+                self._config.setdefault("ui", {}).__setitem__(
+                    f"show_{n.lower().replace(' ', '_')}", checked
+                ),
+            )
+        )
+
+        # Detach / reattach
+        if name in self._detached_windows:
+            sub.addAction("Reattach").triggered.connect(
+                lambda n=name: self._reattach_card(n)
+            )
+        else:
+            sub.addAction("Detach").triggered.connect(
+                lambda n=name: self._detach_card(n)
             )
 
-            if name in self._detached_windows:
-                detach_a = sub.addAction("Reattach")
-                detach_a.triggered.connect(lambda: self._reattach_card(name))
-            else:
-                detach_a = sub.addAction("Detach")
-                detach_a.triggered.connect(lambda: self._detach_card(name))
+        # Move up / down
+        order = self._config.get("ui", {}).get("card_order") or [
+            n for n, _, _ in _CARD_DEFS
+        ]
+        idx = order.index(name) if name in order else -1
+        if idx > 0:
+            sub.addAction("Move up").triggered.connect(
+                lambda n=name: self._move_card(n, -1)
+            )
+        if idx >= 0 and idx < len(order) - 1:
+            sub.addAction("Move down").triggered.connect(
+                lambda n=name: self._move_card(n, 1)
+            )
 
-            # Reorder controls
-            order = self._config.get("ui", {}).get("card_order") or [n for n, _, _ in _CARD_DEFS]
-            idx = order.index(name) if name in order else -1
-            if idx > 0:
-                up_a = sub.addAction("Move up")
-                up_a.triggered.connect(lambda n=name: self._move_card(n, -1))
-            if idx >= 0 and idx < len(order) - 1:
-                down_a = sub.addAction("Move down")
-                down_a.triggered.connect(lambda n=name: self._move_card(n, 1))
-
-            # Per-item toggles for GPU and Disk cards
-            if name == "GPU" and hasattr(card, "visible_gpu_list"):
-                sub.addSeparator()
-                for gpu_name in card.visible_gpu_list:
-                    ga = sub.addAction(gpu_name)
-                    ga.setCheckable(True)
-                    ga.setChecked(gpu_name not in card.hidden_gpus)
-                    ga.triggered.connect(
-                        lambda checked, cn=gpu_name: (
-                            card.hidden_gpus.add(cn) if not checked else card.hidden_gpus.discard(cn)
-                        )
+        # GPU-specific per-adapter toggles
+        if name == "GPU" and hasattr(card, "visible_gpu_list"):
+            sub.addSeparator()
+            for gpu_name in card.visible_gpu_list:
+                ga = sub.addAction(gpu_name)
+                ga.setCheckable(True)
+                ga.setChecked(gpu_name not in card.hidden_gpus)
+                ga.triggered.connect(
+                    lambda checked, cn=gpu_name: (
+                        card.hidden_gpus.add(cn)
+                        if not checked
+                        else card.hidden_gpus.discard(cn)
                     )
-
-        # Disk drives section
-        if self._disk_cards:
-            disk_menu = menu.addMenu("Drives")
-            for label in sorted(self._disk_cards.keys()):
-                da = disk_menu.addAction(f"Drive {label}")
-                da.setCheckable(True)
-                da.setChecked(self._disk_cards[label].isVisible())
-                da.triggered.connect(
-                    lambda checked, lbl=label: self._disk_cards[lbl].setVisible(checked)
                 )
 
-        menu.addSeparator()
-        swap_a = menu.addAction("Show swap")
-        swap_a.setCheckable(True)
-        swap_a.setChecked(bool(self._config.get("ui", {}).get("show_swap", True)))
-        swap_a.triggered.connect(self._toggle_show_swap)
-        menu.addSeparator()
-        lock_a = menu.addAction("Lock position (L)")
-        lock_a.setCheckable(True)
-        lock_a.setChecked(bool(self._config.get("window", {}).get("locked", False)))
-        lock_a.triggered.connect(self._toggle_lock)
+    def _add_drive_menu(self, menu: QMenu) -> None:
+        """Add per-disk-drive visibility submenu."""
+        if not self._disk_cards:
+            return
+        disk_menu = menu.addMenu("Drives")
+        for label in sorted(self._disk_cards.keys()):
+            da = disk_menu.addAction(f"Drive {label}")
+            da.setCheckable(True)
+            da.setChecked(self._disk_cards[label].isVisible())
+            da.triggered.connect(
+                lambda checked, lbl=label: self._disk_cards[lbl].setVisible(checked)
+            )
 
-        autostart_a = menu.addAction("Run at Windows startup")
-        autostart_a.setCheckable(True)
-        autostart_a.setChecked(self._config.get("window", {}).get("autostart", False))
-        autostart_a.triggered.connect(self._toggle_autostart)
-
-        theme_a = menu.addAction("Light theme")
-        theme_a.setCheckable(True)
-        theme_a.setChecked(self._config.get("ui", {}).get("theme", "dark") == "light")
-        theme_a.triggered.connect(self._toggle_theme)
-
-        menu.addSeparator()
-
+    def _add_dock_menu(self, menu: QMenu) -> None:
+        """Add the dock-to-edge submenu."""
         dock_menu = menu.addMenu("Dock to edge")
-        for side, label in [("left", "Left"), ("right", "Right"), ("top", "Top"), ("bottom", "Bottom")]:
+        for side, label in [("left", "Left"), ("right", "Right"),
+                            ("top", "Top"), ("bottom", "Bottom")]:
             da = dock_menu.addAction(label)
             da.setCheckable(True)
-            da.setChecked(self._config.get("window", {}).get("dock_side", "") == side)
-            da.triggered.connect(lambda checked, s=side: self._dock_to_side(s, register_appbar=True))
+            da.setChecked(
+                self._config.get("window", {}).get("dock_side", "") == side
+            )
+            da.triggered.connect(
+                lambda checked, s=side: self._dock_to_side(s, register_appbar=True)
+            )
         dock_menu.addSeparator()
-        undock_a = dock_menu.addAction("Undock")
-        undock_a.triggered.connect(self._toggle_appbar)
+        dock_menu.addAction("Undock").triggered.connect(self._toggle_appbar)
 
-        screen_menu = menu.addMenu("Screen")
+    def _add_screen_menu(self, menu: QMenu) -> None:
+        """Add the screen selector submenu."""
         from PySide6.QtGui import QGuiApplication
+        screen_menu = menu.addMenu("Screen")
         for i, sc in enumerate(QGuiApplication.screens()):
             name = sc.name() or f"Display {i + 1}"
             geo = sc.geometry()
             label = f"{name}  ({geo.width()}x{geo.height()})"
             sa = screen_menu.addAction(label)
             sa.setCheckable(True)
-            sa.setChecked(self._config.get("window", {}).get("dock_screen", "") == name)
-            sa.triggered.connect(lambda checked, n=name: (
-                self._config.setdefault("window", {}) .__setitem__("dock_screen", n),
-                self._save_position(),
-                self._dock_to_side(self._config.get("window", {}).get("dock_side", ""), register_appbar=True)
-                if self._config.get("window", {}).get("dock_side") else None,
-            ))
-
-        global_pos = btn.mapToGlobal(QPoint(0, btn.height()))
-        menu.exec(global_pos)
+            sa.setChecked(
+                self._config.get("window", {}).get("dock_screen", "") == name
+            )
+            sa.triggered.connect(
+                lambda checked, n=name: (
+                    self._config.setdefault("window", {}).__setitem__(
+                        "dock_screen", n
+                    ),
+                    self._save_position(),
+                    self._dock_to_side(
+                        self._config.get("window", {}).get("dock_side", ""),
+                        register_appbar=True,
+                    )
+                    if self._config.get("window", {}).get("dock_side")
+                    else None,
+                )
+            )
 
     def _toggle_show_gpu(self) -> None:
         cfg = self._config.setdefault("ui", {})
