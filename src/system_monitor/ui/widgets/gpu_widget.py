@@ -132,7 +132,6 @@ class _GpuRow(QWidget):
             "height: 6px; border-radius: 3px; }"
             f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
         )
-        self._set_alert(util, warn=80.0, crit=95.0)
         source = gpu.get("source", "")
         self._source.setText("")
 

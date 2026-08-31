@@ -166,6 +166,29 @@ class TestGPU(unittest.TestCase):
             self.assertIn("vendor", a)
             self.assertIn("vram_mb", a)
 
+    def test_gpu_widget_update_does_not_crash(self):
+        """Regression: set_gpu() previously called self._set_alert() which
+        doesn't exist on _GpuRow (it's on _Card). The exception silently
+        killed the update, leaving the GPU card empty/stale."""
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+
+        from system_monitor.ui.widgets.gpu_widget import GpuCard
+        card = GpuCard()
+        snap = {"gpus": [{
+            "name": "Test GPU", "vendor": "nvidia",
+            "util_percent": 25.0, "mem_used_mb": 1000, "mem_total_mb": 8000,
+            "mem_percent": 12.5, "power_w": 50.0, "fan_percent": 30.0,
+            "source": "test",
+        }]}
+        # Should not raise
+        card.update(snap)
+        # VRAM bar should reflect the snapshot
+        if card._rows:
+            self.assertEqual(card._rows[0]._vram_bar.value(), 12)
+            self.assertEqual(card._rows[0]._vram_pct.text(), "12%")
+
 
 class TestDragDrop(unittest.TestCase):
     """Drag-and-drop wiring exists and doesn't crash."""
