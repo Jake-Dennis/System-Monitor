@@ -54,6 +54,11 @@ def color_for_percent(p: float, *, hot_at: float = 70.0, crit_at: float = 90.0) 
     return ACCENT
 
 
+def _sz(name: str, scale: float) -> int:
+    """Return a scaled pixel size for a named base size (see `BASE`)."""
+    return max(1, round(BASE[name] * scale))
+
+
 def qss(scale: float = 1.0, theme: str = "dark") -> str:
     """Generate the QSS stylesheet with scaled fonts and chosen theme.
 
