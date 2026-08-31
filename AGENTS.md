@@ -15,7 +15,7 @@ codebase; the non-obvious facts below took research to surface.
 - **Config:** JSON in `%APPDATA%\SystemMonitor\config.json` (override with
   `SYSTEM_MONITOR_HOME`)
 - **Deps:** auto-installed by `run.py` via `depcheck.ensure()` — two tiers:
-  required (PySide6, psutil) and optional (nvidia-ml-py, wmi, requests)
+  required (PySide6, psutil) and optional (nvidia-ml-py, wmi)
 
 ## Install + run (without thinking)
 
@@ -38,8 +38,7 @@ py -3.13 -c "from system_monitor.data.collector import Collector; c=Collector();
 | `src/system_monitor/config.py`                          | `load()` / `save()` JSON config with `deepcopy(DEFAULTS)` + `_deep_merge` |
 | `src/system_monitor/data/collector.py`                  | Background thread, calls every sensor, emits a snapshot dict. Keeps `_prev_disk`/`_prev_net` for rate computation |
 | `src/system_monitor/data/cpu.py` / `memory.py` / `disk.py` / `network.py` | psutil wrappers, plain dicts out |
-| `src/system_monitor/data/gpu.py`                        | Merges NVML, LHM HTTP, and DXGI. Enrichment order: NVML fills, then LHM fills gaps without overwriting non-zero values |
-| `src/system_monitor/data/lhm_gpu.py`                    | Walks LHM JSON tree for any vendor GPU sensors |
+| `src/system_monitor/data/gpu.py`                        | Merges NVML, Windows PDH, and DXGI. Enrichment order: NVML fills, then PDH fills gaps for any vendor |
 | `src/system_monitor/data/dxgi.py`                       | Adapter enumeration via WMI `Win32_VideoController` |
 | `src/system_monitor/ui/styles.py`                       | QSS theme + `color_for_percent` helper. All style in one file |
 | `src/system_monitor/ui/main_window.py`                  | Frameless window, drag-to-move header, context menu, shortcuts. Min size 380×720 |
@@ -59,18 +58,18 @@ py -3.13 -c "from system_monitor.data.collector import Collector; c=Collector();
   remove the prime call.
 - **GPU collection is layered.** `GpuCollector.snapshot()` always returns one
   entry per adapter the system reports (via DXGI), even when no sensor source
-  is available. Enrichment: NVML fills values first, then LHM fills remaining
-  gaps — never overwrites a non-zero/non-None value with zero from LHM. The
-  `source` field is `nvml`, `lhm`, `nvml+lhm`, `dxgi`, or `unavailable`.
+  is available. Enrichment: NVML fills values first, then Windows PDH fills
+  remaining gaps for any vendor. The `source` field is `nvml`, `pdh`,
+  `nvml+pdh`, `dxgi`, or `unavailable`.
 - **Disk IO rates are derived from cumulative `psutil.disk_io_counters`.**
   The collector keeps `prev["counters"]` between calls; deleting that state
   will silently break the read/write MB/s readout.
-- **LHM is the only path for AMD / Intel GPU utilization, memory, fan,
-  and power.** NVML is NVIDIA-only. Without LHM running as Administrator,
-  AMD and Intel adapters will show name + total VRAM only (via DXGI).
+- **AMD / Intel GPU utilization and VRAM come from Windows PDH.** NVML is
+  NVIDIA-only. PDH works for any vendor with no external software, so AMD and
+  Intel adapters still get live util/VRAM out of the box.
 - **`depcheck.ensure()` runs before `system_monitor` is imported** — it uses
   only stdlib so it can install missing packages (PySide6, psutil) before they
-  are imported. Optional deps (nvidia-ml-py, wmi, requests) get a one-line
+  are imported. Optional deps (nvidia-ml-py, wmi) get a one-line
   note and the app continues without them.
 - **The PySide6 import errors you see in the LSP before installing deps are
   expected.** They resolve after `pip install -r requirements.txt` or running
@@ -129,8 +128,6 @@ above) and launching `python run.py` / `.\run.bat`. Success criteria:
 - **Window invisible after windowFlags change** — `setWindowFlags()` resets
   other flags. Always use `MainWindow.apply_always_on_top()` which rebuilds
   from `self.windowFlags()` and calls `show()` after.
-- **AMD/Intel GPU shows only name + VRAM** — LHM is not running, or was not
-  run as Administrator.
 - **Position resets on every launch** — config save is wired to
   `aboutToQuit`. Task Manager kill won't persist it.
 - **Black background, not translucent** — do not toggle

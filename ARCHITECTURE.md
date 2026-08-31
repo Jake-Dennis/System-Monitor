@@ -58,7 +58,7 @@ dicts or Qt signals — never through shared mutable state.
 - **`depcheck.py`**: Checks two tiers:
   - **Required** (PySide6, psutil) — auto-`pip install`s if missing; exits
     with a readable message on failure.
-  - **Optional** (nvidia-ml-py, wmi, requests) — prints a one-line note and
+  - **Optional** (nvidia-ml-py, wmi) — prints a one-line note and
     continues. The app degrades gracefully without them.
 
 ### 2. Application Core
@@ -100,16 +100,13 @@ in `try/except` and returns `None` or `0.0` on failure.
   from cumulative counters stored in `prev`.
 - **`gpu.py`**: Layered enrichment per adapter:
   1. **NVML** (`nvidia-ml-py`) — fills util, VRAM, power, fan. NVIDIA only.
-  2. **LHM** (LibreHardwareMonitor HTTP) — fills any gaps. Works on any
-     vendor. Never overwrites a non-zero value from NVML.
+  2. **Windows PDH** — fills util/VRAM for any vendor via built-in
+     performance counters (no external software).
   3. **DXGI** (WMI `Win32_VideoController`) — name + VRAM only, always
      available baseline. Virtual display adapters are filtered out via
      `_is_virtual()`.
   Returns one entry per adapter even when no sensor source responds. The
   `source` field tracks which layers contributed.
-- **`lhm_gpu.py`**: Fetches `http://localhost:8085/data.json` and walks the
-  recursive JSON tree for `/gpu-{vendor}/{idx}/` subtrees. Also exposes CPU
-  package power via `read_cpu_power_w()`.
 - **`dxgi.py`**: Enumerates adapters via WMI `Win32_VideoController`. Filters
   out virtual adapters (`_is_virtual()`). Returns name, vendor classification,
   and VRAM.
@@ -157,13 +154,13 @@ in `try/except` and returns `None` or `0.0` on failure.
   card space.
 - **`widgets/cpu_widget.py`**: **`CpuCard`** — shows total %, per-core strip
   (`_PerCoreStrip`, custom-painted vertical bars), model name, thread count,
-  frequency, CPU package power (from LHM). Timeline of total %.
+  frequency. Timeline of total %.
 - **`widgets/ram_widget.py`**: **`RamCard`** — shows RAM %, used/total GB,
   optional swap %. Timeline of RAM %.
 - **`widgets/gpu_widget.py`**: **`GpuCard`** — one `_GpuRow` per adapter.
   Each row shows: vendor·name, util bar + %, VRAM bar + %, power W, fan %,
   and a util timeline. Per-adapter visibility toggle. Footer show adapter
-  count, source breakdown, combined CPU+GPU power.
+  count, source breakdown, combined GPU power.
 - **`widgets/disk_widget.py`**: **`DiskCard`** — one `_DiskRow` per drive.
   Each row shows: drive label, IO activity bar + %, R/W rates, and a compact
   timeline. Per-disk visibility toggle.
@@ -219,8 +216,6 @@ run.py
        │    └─ print "optional not installed" (continue)
        ├─ importlib.import_module("wmi")       → missing?
        │    └─ print "optional not installed" (continue)
-       └─ importlib.import_module("requests")  → missing?
-            └─ print "optional not installed" (continue)
   └─ app.main() → QApplication + MainWindow + Collector + QTimer
 ```
 
@@ -239,8 +234,7 @@ Collector._run()  [daemon thread: "system-monitor-collector"]
        │    │              updates self._prev_disk
        │    ├─ "network": net_mod.snapshot(prev)    [psutil]
        │    │              updates self._prev_net
-       │    ├─ "gpus":    GpuCollector.snapshot()   [NVML → LHM → DXGI]
-       │    └─ append cpu_power_w if LHM available
+       │    ├─ "gpus":    GpuCollector.snapshot()   [NVML → PDH → DXGI]
        ├─ self._on_snapshot(snap)
        └─ sleep(max(0.05, interval - (time.time() - t0)))
 ```
@@ -282,16 +276,13 @@ The collector can run at any rate (default 1 Hz). The UI always repaints at
 ```
 GpuCollector.snapshot()
   │
-  ├─ Fetch LHM tree once (single HTTP GET to http://localhost:8085/data.json)
-  │    → vendor buckets: {"nvidia": [nv_gpu], "intel": [intel_gpu], ...}
-  │
   ├─ For each adapter (from DXGI, filtered for virtual):
   │   ├─ _empty_entry(idx, name, vendor)  ← baseline with 0s
   │   ├─ [1] NVML enrich (if NVIDIA + pynvml available)
   │   │    util_percent, mem_*, power_w, fan_percent
-  │   ├─ [2] LHM enrich (if matching vendor found in tree)
-  │   │    Fills any None/0 fields. NEVER overwrites non-zero from NVML.
-  │   └─ source = "nvml" | "lhm" | "nvml+lhm" | "dxgi" | "unavailable"
+  │   ├─ [2] PDH enrich (any vendor — built-in Windows counters)
+  │   │    util_percent, mem_used_mb
+  │   └─ source = "nvml" | "pdh" | "nvml+pdh" | "dxgi" | "unavailable"
   │
   └─ Returns list[dict], one entry per adapter
 ```
@@ -340,7 +331,6 @@ All cross-layer communication uses `dict[str, Any]`. The snapshot shape:
         "freq_mhz": float | None,
         "name": str,               # WMI Win32_Processor.Name
         "arch": str,
-        "power_w": float | None,   # from LHM if available
     },
     "memory": {
         "percent": float,
@@ -373,7 +363,7 @@ All cross-layer communication uses `dict[str, Any]`. The snapshot shape:
         "mem_percent": float,
         "power_w": float | None,
         "fan_percent": float | None,
-        "source": str,             # "nvml" | "lhm" | "nvml+lhm" | "dxgi" | "unavailable"
+        "source": str,             # "nvml" | "pdh" | "nvml+pdh" | "dxgi" | "unavailable"
     }],
 }
 ```
@@ -399,8 +389,8 @@ assumes a field is present — cards access via `snapshot.get("key", {})` or
   touches from the Qt side. Widgets are never touched directly from the
   collector — all updates go through `Signal.emit()`.
 - **GPU enrichment order**: NVML writes first (NVIDIA only, most complete),
-  then LHM fills gaps without overwriting non-zero values, then DXGI is the
-  always-available fallback for name + VRAM.
+  then PDH fills gaps for any vendor, then DXGI is the always-available
+  fallback for name + VRAM.
 - **`psutil.cpu_percent(interval=None)` returns 0 on first call**. The
   collector primes it before the main loop. Never remove the prime.
 - **Disk/net rates are derived from cumulative counters**. The collector
@@ -434,12 +424,10 @@ graph TB
         subgraph "GPU Pipeline"
             gpu["gpu.py<br/>GpuCollector"]
             nvml["pynvml<br/>NVIDIA only"]
-            lhm["lhm_gpu.py<br/>LHM HTTP"]
             dxgi["dxgi.py<br/>WMI Win32_Controller"]
             dxgi -->|adapter[0]| gpu
             dxgi -->|adapter[N]| gpu
             gpu --> nvml
-            gpu --> lhm
         end
     end
 
@@ -492,7 +480,7 @@ graph TB
     classDef win fill:#3d0c11,stroke:#e94560,color:#eee
     class run,depcheck entry
     class app,config,bridge,timer,tray core
-    class collector,cpu,mem,disk,net,gpu,nvml,lhm,dxgi data
+    class collector,cpu,mem,disk,net,gpu,nvml,dxgi data
     class _card,timeline,cpu_card,ram_card,disk_card,net_card,gpu_card,media_card,header ui
     class styles theme
     class taskbar win

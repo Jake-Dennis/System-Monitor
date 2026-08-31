@@ -1,17 +1,16 @@
-r"""GPU stats: NVML for NVIDIA, LHM for everything (AMD/NVIDIA/Intel),
-DXGI for name + VRAM, Windows PDH for fallback util/VRAM usage.
+r"""GPU stats: NVML for NVIDIA, DXGI for name + VRAM, Windows PDH for
+fallback util/VRAM usage.
 
 Adapter list comes from DXGI (Win32_VideoController) so the card always
 knows the GPU's name, vendor, and total VRAM — even on systems where
-NVML is missing and LHM is not running.
+NVML is missing.
 
 Per-sensor enrichment order, applied per adapter:
   1. NVML (NVIDIA only, fastest, most complete)
-  2. LHM (any vendor, fills gaps when NVML is absent or for AMD/Intel)
-  3. Windows PDH (any vendor, no external deps — provides util/VRAM used
+  2. Windows PDH (any vendor, no external deps — provides util/VRAM used
      via `\GPU Engine(*)\Utilization Percentage` and
      `\GPU Adapter Memory(*)\Dedicated Usage`)
-  4. DXGI name + VRAM only if nothing else responds
+  3. DXGI name + VRAM only if nothing else responds
 """
 from __future__ import annotations
 
@@ -29,7 +28,6 @@ else:
         pynvml = None
 
 from . import dxgi
-from .lhm_gpu import LhmGpuReader
 
 
 log = logging.getLogger(__name__)
@@ -53,7 +51,6 @@ def _empty_entry(idx: int, name: str, vendor: str) -> dict[str, Any]:
 class GpuCollector:
     def __init__(self) -> None:
         self._adapters: list[dict[str, Any]] = []  # private metadata
-        self._lhm: LhmGpuReader | None = None
         self._pdh_query = None
         self._pdh_primed = False
         self._pdh_util_counter = None
@@ -67,29 +64,7 @@ class GpuCollector:
     def available(self) -> bool:
         return bool(self._adapters)
 
-    def read_cpu_power_w(self) -> float | None:
-        """Return CPU package power in watts from LHM, or None."""
-        if self._lhm is not None:
-            return self._lhm.read_cpu_power_w()
-        return None
-
-    def read_cpu_temp_c(self) -> float | None:
-        """Return CPU package temperature in Celsius from LHM, or None."""
-        if self._lhm is not None:
-            return self._lhm.read_cpu_temp_c()
-        return None
-
     def snapshot(self) -> list[dict[str, Any]]:
-        # Read LHM once for all adapters (single HTTP fetch).
-        lhm_by_vendor: dict[str, list[dict[str, Any]]] = {}
-        if self._lhm is not None and self._lhm.available:
-            try:
-                for gpu in self._lhm.snapshot():
-                    v = gpu.get("vendor", "unknown")
-                    lhm_by_vendor.setdefault(v, []).append(gpu)
-            except Exception:
-                log.exception("LHM GPU snapshot failed")
-
         out: list[dict[str, Any]] = []
         for idx, adapter in enumerate(self._adapters):
             entry = _empty_entry(idx, adapter["name"], adapter["vendor"])
@@ -101,13 +76,7 @@ class GpuCollector:
             if adapter.get("_nvml_handle") is not None and pynvml is not None:
                 self._enrich_nvml(entry, adapter["_nvml_handle"])
 
-            # 2. LHM (any vendor — fills gaps; the only source for AMD/Intel)
-            vendor = adapter["vendor"]
-            lhm_list = lhm_by_vendor.get(vendor, [])
-            if lhm_list:
-                self._enrich_lhm(entry, lhm_list.pop(0))
-
-            # 3. Windows PDH (any vendor — no external deps, always available)
+            # 2. Windows PDH (any vendor — no external deps, always available)
             if self._pdh_query is not None:
                 self._enrich_pdh(entry, idx)
 
@@ -139,11 +108,6 @@ class GpuCollector:
                     name = f"NVIDIA GPU {i}"
                 adapters.append({"name": name, "vendor": "nvidia", "vram_mb": 0.0})
 
-        try:
-            self._lhm = LhmGpuReader()
-        except Exception:
-            self._lhm = None
-
         # Match NVML handles to DXGI adapters by vendor (NVIDIA only).
         nvml_cursor = 0
         for a in adapters:
@@ -163,7 +127,7 @@ class GpuCollector:
         """Open Windows Performance Counter queries for GPU util/VRAM.
 
         No external deps needed — uses pywin32's win32pdh which is already
-        a required dep. Provides a fallback for systems where LHM isn't
+        a required dep. Provides a fallback for systems where NVML isn't
         installed but we still want GPU utilization data.
 
         PDH counters need two samples with a delay between them to
@@ -214,36 +178,10 @@ class GpuCollector:
         except Exception:
             pass
         try:
-            entry["temp_c"] = int(pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU))
-        except Exception:
-            pass
-        try:
             entry["fan_percent"] = float(pynvml.nvmlDeviceGetFanSpeed(h))
         except Exception:
             pass
         entry["source"] = "nvml"
-
-    @staticmethod
-    def _enrich_lhm(entry: dict[str, Any], lhm_gpu: dict[str, Any]) -> None:
-        """Fill gaps in `entry` from an LHM GPU snapshot. Never overwrites
-        a real (non-zero, non-None) value with zero/None."""
-        for key in ("util_percent", "mem_used_mb", "mem_total_mb",
-                    "fan_percent", "power_w"):
-            new = lhm_gpu.get(key)
-            if new is None:
-                continue
-            current = entry.get(key)
-            if current in (None, 0, 0.0):
-                entry[key] = new
-        # Recompute mem percent after potentially filling mem fields.
-        if entry["mem_used_mb"] and entry["mem_total_mb"]:
-            entry["mem_percent"] = round(
-                100.0 * entry["mem_used_mb"] / entry["mem_total_mb"], 1
-            )
-        if entry["source"] == "none":
-            entry["source"] = "lhm"
-        else:
-            entry["source"] = f"{entry['source']}+lhm"
 
     def _enrich_pdh(self, entry: dict[str, Any], adapter_idx: int) -> None:
         """Fill util_percent and mem_used_mb from Windows PDH GPU counters.

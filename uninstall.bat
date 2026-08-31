@@ -36,15 +36,6 @@ if exist "%STARTUP_LNK%" (
     echo [uninstall] No startup shortcut found.
 )
 
-REM --- Remove LibreHardwareMonitor (optional temp tool) ---
-if exist "tools\LibreHardwareMonitor\" (
-    echo [uninstall] Removing LibreHardwareMonitor...
-    rmdir /s /q "tools\LibreHardwareMonitor"
-    echo [uninstall] LibreHardwareMonitor removed.
-) else (
-    echo [uninstall] No LibreHardwareMonitor found.
-)
-
 REM --- Optionally remove config ---
 echo.
 echo [uninstall] Config file at %APPDATA%\SystemMonitor\config.json

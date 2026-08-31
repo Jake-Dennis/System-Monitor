@@ -54,44 +54,6 @@ def color_for_percent(p: float, *, hot_at: float = 70.0, crit_at: float = 90.0) 
     return ACCENT
 
 
-def color_for_temp(temp_c: float | None) -> str:
-    """Return a hex color for a temperature reading in Celsius.
-
-    Thresholds: <55 cool green, 55-75 accent, 75-85 warm, 85-90 hot, >90 critical.
-    """
-    if temp_c is None:
-        return "#5C6678"  # neutral dim
-    t = float(temp_c)
-    if t >= 90:
-        return CRIT
-    if t >= 85:
-        return HOT
-    if t >= 75:
-        return WARN
-    if t >= 55:
-        return ACCENT
-    return "#4ADE80"  # cool green
-
-
-def temp_badge_style(temp_c: float | None) -> str:
-    """Return inline QSS for a temperature badge QLabel."""
-    color = color_for_temp(temp_c)
-    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-    return (
-        f"color: {color}; "
-        f"background-color: rgba({r}, {g}, {b}, 30); "
-        f"border: 1px solid rgba({r}, {g}, {b}, 80); "
-        f"border-radius: 4px; "
-        f"padding: 2px 8px; "
-        f"font-size: 12px; "
-        f"font-weight: 700;"
-    )
-
-
-def _sz(name: str, scale: float) -> str:
-    return f"{max(1, round(BASE[name] * scale))}px"
-
-
 def qss(scale: float = 1.0, theme: str = "dark") -> str:
     """Generate the QSS stylesheet with scaled fonts and chosen theme.
 

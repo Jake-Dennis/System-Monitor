@@ -101,21 +101,14 @@ class _GpuRow(QWidget):
         row2.addWidget(self._vram_pct)
         root.addLayout(row2)
 
-        # Row 3: temp badge + details (power, fan, VRAM size text)
+        # Row 3: details (power, fan, VRAM size text)
         row3 = QHBoxLayout()
         row3.setContentsMargins(0, 0, 0, 0)
         row3.setSpacing(8)
 
-        self._temp_badge = QLabel("—")
-        self._temp_badge.setObjectName("TempBadge")
-        self._temp_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._temp_badge.setFixedHeight(22)
-        self._temp_badge.setMinimumWidth(52)
-
         self._details = QLabel("")
         self._details.setObjectName("Secondary")
 
-        row3.addWidget(self._temp_badge)
         row3.addWidget(self._details, 1)
         root.addLayout(row3)
 
@@ -179,14 +172,6 @@ class _GpuRow(QWidget):
             parts.append(f"fan {float(fan):.0f}%")
         self._details.setText("   ·   ".join(parts) if parts else "")
 
-        # Temperature badge
-        temp = gpu.get("temp_c")
-        if temp is not None:
-            self._temp_badge.setText(f"{float(temp):.0f}°C")
-        else:
-            self._temp_badge.setText("—")
-        self._temp_badge.setStyleSheet(styles.temp_badge_style(temp))
-
         # Timeline
         self._timeline.set_color(color)
         self._timeline.add_point(util)
@@ -233,7 +218,6 @@ class GpuCard(_Card):
 
     def update(self, snapshot: dict[str, Any]) -> None:
         gpus = snapshot.get("gpus", []) or []
-        cpu_power = snapshot.get("cpu", {}).get("power_w")
 
         # Track visible GPU names for the settings menu
         self.visible_gpu_list = [
@@ -262,8 +246,7 @@ class GpuCard(_Card):
         if not gpus:
             # Show placeholder.
             if not self._rows:
-                ph = QLabel("No GPU detected. NVIDIA works out of the box;\n"
-                            "AMD/Intel need LibreHardwareMonitor running (see README).")
+                ph = QLabel("No GPU detected. NVIDIA works out of the box.")
                 ph.setObjectName("Secondary")
                 ph.setWordWrap(True)
                 self._rows_layout.addWidget(ph)
@@ -307,12 +290,7 @@ class GpuCard(_Card):
             gpu_power = sum(
                 float(g.get("power_w", 0.0) or 0.0) for g in gpus
             )
-            if cpu_power is not None and gpu_power > 0:
-                total = cpu_power + gpu_power
-                footer_parts.append(
-                    f"CPU {cpu_power:.0f} + GPU {gpu_power:.0f} = {total:.0f} W"
-                )
-            elif gpu_power > 0:
+            if gpu_power > 0:
                 footer_parts.append(f"{gpu_power:.0f} W")
 
             self._footer.setText("  ·  ".join(footer_parts))

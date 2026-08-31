@@ -19,11 +19,7 @@ dist/
 
 # Local config overrides
 config.local.json
-librehardwaremonitor/
 graphify-out/
-
-# Downloaded LHM binary (installed by setup.bat)
-tools/
 
 # opencode tooling artifacts
 .opencode/

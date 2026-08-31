@@ -34,7 +34,6 @@ REQUIRED: dict[str, str] = {
 OPTIONAL: dict[str, str] = {
     "pynvml": "nvidia-ml-py",   # NVIDIA GPU
     "wmi": "wmi",               # DXGI adapter enumeration, AMD/Intel
-    "requests": "requests",     # LHM HTTP (AMD/Intel GPU)
     "winrt.windows.media.control": "winrt-Windows.Media.Control",  # SMTC media controls
 }
 

@@ -6,7 +6,7 @@ RAM, disk, and network load in a frameless, translucent, always-on-top panel.
 ## Features
 
 - **CPU** total + per-core strip, current frequency, model name
-- **GPU** utilization, VRAM, power, fan speed — NVIDIA via NVML out of the box; AMD / Intel need LibreHardwareMonitor running
+- **GPU** utilization, VRAM, power, fan speed — NVIDIA via NVML; all vendors via built-in Windows Performance Counters
 - **Memory** used/total + swap
 - **Disk** all physical volumes with read/write MB/s
 - **Network** up/down rates + lifetime totals
@@ -34,21 +34,6 @@ to move it.
 | Right-click | Open context menu (toggle cards, reset position) |
 | `Esc`     | Close                                 |
 
-## LibreHardwareMonitor (AMD / Intel GPU sensors)
-
-The panel works out of the box for NVIDIA. For AMD or Intel GPUs, util / VRAM
-/ fan / power readings need LibreHardwareMonitor running:
-
-1. Download from <https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases>
-   or `winget install LibreHardwareMonitor.LibreHardwareMonitor`
-2. Launch once **as Administrator** (so its kernel driver can read sensors)
-3. Open **Options → Remote Web Server → Run** (default port `8085`)
-4. Leave LHM running in the system tray; the app polls `http://localhost:8085/data.json`
-
-The GPU card will then show full sensor data for any vendor. Without LHM,
-AMD/Intel adapters still appear by name + total VRAM (via DXGI) but live
-numbers are blank.
-
 ## Configuration
 
 Persisted to `%APPDATA%\SystemMonitor\config.json`. The file is created on
@@ -75,7 +60,7 @@ src/system_monitor/
   config.py                # JSON config in %APPDATA%
   data/
     collector.py           # background sampling thread
-    cpu.py  memory.py  disk.py  network.py  gpu.py  lhm_gpu.py  dxgi.py
+    cpu.py  memory.py  disk.py  network.py  gpu.py  dxgi.py
   ui/
     styles.py              # QSS theme + color helpers
     main_window.py         # frameless, draggable, translucent

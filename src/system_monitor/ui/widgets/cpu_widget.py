@@ -27,13 +27,7 @@ class CpuCard(_Card):
         self._cpu_info.setWordWrap(True)
         layout.addWidget(self._cpu_info)
 
-        # Temperature badge + bar with percentage
-        self._temp_badge = QLabel("—")
-        self._temp_badge.setObjectName("TempBadge")
-        self._temp_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._temp_badge.setFixedHeight(22)
-        self._temp_badge.setMinimumWidth(52)
-
+        # Bar with percentage
         self._bar_pct = QLabel("0%")
         self._bar_pct.setObjectName("ValueSmall")
         self._bar_pct.setFixedWidth(48)
@@ -44,7 +38,6 @@ class CpuCard(_Card):
         bar_row = QHBoxLayout(bar_wrap)
         bar_row.setContentsMargins(0, 0, 0, 0)
         bar_row.setSpacing(6)
-        bar_row.addWidget(self._temp_badge)
         bar_row.addWidget(self._bar, 1)
         bar_row.addWidget(self._bar_pct)
         layout.addWidget(bar_wrap)
@@ -62,14 +55,6 @@ class CpuCard(_Card):
         self._set_bar(pct, color)
         self._set_alert(pct)
         self._bar_pct.setText(f"{pct:.0f}%")
-
-        # Temperature badge
-        temp = cpu.get("temp_c")
-        if temp is not None:
-            self._temp_badge.setText(f"{float(temp):.0f}°C")
-        else:
-            self._temp_badge.setText("—")
-        self._temp_badge.setStyleSheet(styles.temp_badge_style(temp))
 
         # Info line: CPU: (Model) (C/T) - GHz
         name = cpu.get("name", "").strip()
