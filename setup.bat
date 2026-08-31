@@ -36,13 +36,32 @@ if errorlevel 1 (
     echo [ok] Dependency marker written.
 )
 
+REM --- Install LibreHardwareMonitor (optional, for CPU temperature) ---
+echo.
+echo [3/3] LibreHardwareMonitor (for CPU temperature)...
+if exist "tools\LibreHardwareMonitor\LibreHardwareMonitor.exe" (
+    echo [3/3] LibreHardwareMonitor already installed.
+) else (
+    echo [3/3] Downloading LibreHardwareMonitor v0.9.6...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $u='https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v0.9.6/LibreHardwareMonitor.zip'; $z=Join-Path $PWD 'tools\lhm.zip'; New-Item -ItemType Directory -Force -Path 'tools' | Out-Null; Invoke-WebRequest -Uri $u -OutFile $z -UseBasicParsing; Expand-Archive -Path $z -DestinationPath 'tools\LibreHardwareMonitor' -Force; Remove-Item $z -Force"
+    if errorlevel 1 (
+        echo [!] LibreHardwareMonitor download failed. CPU temperature will be
+        echo     unavailable, but all other features still work.
+    ) else (
+        echo [3/3] LibreHardwareMonitor installed to tools\LibreHardwareMonitor.
+        echo       Run run-lhm.bat to launch it with the monitor.
+    )
+)
+
 echo.
 echo Install complete. Launch the app with run.bat.
 echo.
 echo GPU stats use built-in Windows Performance Counters
 echo (no external software required). All GPUs work out of the box.
 echo.
-echo NOTE: For CPU temperature, run LibreHardwareMonitor (as Admin) with
-echo the Remote Web Server enabled, or launch run.bat as Administrator.
+echo For CPU temperature:
+echo   - Run run-lhm.bat (launches LibreHardwareMonitor as Admin + the monitor)
+echo   - In LibreHardwareMonitor, enable Options ^> Remote Web Server ^> Run
+echo     (one time - the setting is remembered).
 pause
 endlocal
