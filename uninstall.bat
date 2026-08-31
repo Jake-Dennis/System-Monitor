@@ -1,5 +1,6 @@
 @echo off
-REM Uninstalls System Monitor — removes venv, startup shortcut, and optionally config.
+REM Uninstalls System Monitor - removes venv, startup shortcut, and
+REM optionally the saved config. Source files are left in place.
 REM Run from the project directory.
 
 setlocal
@@ -11,12 +12,12 @@ echo   System Monitor - Uninstall
 echo ============================================
 echo.
 
-:: Remove .venv
+REM --- Remove virtual environment ---
 if exist ".venv\" (
     echo [uninstall] Removing virtual environment...
     rmdir /s /q ".venv"
     if errorlevel 1 (
-        echo [uninstall] WARNING: Could not fully remove .venv. You may need to close
+        echo [uninstall] WARNING: Could not fully remove .venv. Close any
         echo           programs using Python in this folder and try again.
     ) else (
         echo [uninstall] Virtual environment removed.
@@ -25,7 +26,7 @@ if exist ".venv\" (
     echo [uninstall] No virtual environment found.
 )
 
-:: Remove startup shortcut
+REM --- Remove startup shortcut ---
 set STARTUP_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\System Monitor.lnk
 if exist "%STARTUP_LNK%" (
     echo [uninstall] Removing startup shortcut...
@@ -35,9 +36,11 @@ if exist "%STARTUP_LNK%" (
     echo [uninstall] No startup shortcut found.
 )
 
-:: Ask about config
+REM --- Optionally remove config ---
 echo.
-echo [uninstall] The config file at %%APPDATA%%\SystemMonitor\config.json was not removed.
+echo [uninstall] Config file at %APPDATA%\SystemMonitor\config.json
+echo           will NOT be removed automatically.
+echo.
 setlocal enabledelayedexpansion
 set /p REMOVE_CONFIG=Remove saved settings and config? (y/N): 
 if /i "!REMOVE_CONFIG!"=="y" (
@@ -51,9 +54,9 @@ if /i "!REMOVE_CONFIG!"=="y" (
 endlocal
 
 echo.
-echo [uninstall] Done. The source files in %~dp0 are still present
-echo           in case you want to reinstall. Delete the folder manually
-echo           to remove them completely.
+echo [uninstall] Done. Source files in %~dp0 are still present
+echo           in case you want to reinstall. Delete the folder
+echo           manually to remove them completely.
 echo.
 pause
 endlocal
