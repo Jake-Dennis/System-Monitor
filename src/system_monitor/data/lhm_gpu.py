@@ -82,6 +82,49 @@ class LhmGpuReader:
                 return result
         return None
 
+    def read_cpu_temp_c(self) -> float | None:
+        """Return CPU package temperature in Celsius, or None if unavailable.
+
+        LHM exposes CPU temps under /cpu/{idx}/ (e.g. "CPU Package",
+        "Core Average", or per-core sensors). We return the hottest reading
+        found so the badge reflects the worst case. Requires LHM running
+        elevated (its own process); this reader itself needs no admin.
+        """
+        if not self._ok:
+            return None
+        data = self._fetch_tree()
+        if data is None:
+            return None
+        hottest: float | None = None
+        for idx in range(8):
+            prefix = f"/cpu/{idx}/"
+            node = self._find_node(data, prefix)
+            if node is None:
+                continue
+            result = self._find_temperature(node, prefix)
+            if result is not None:
+                if hottest is None or result > hottest:
+                    hottest = result
+        return hottest
+
+    @staticmethod
+    def _find_temperature(node: dict, prefix: str) -> float | None:
+        """Deep search under `node` for the hottest Temperature sensor."""
+        sid = node.get("SensorId", "") or ""
+        stype = node.get("Type", "") or ""
+        if sid.startswith(prefix) and stype == "Temperature":
+            value = node.get("Value")
+            if value is not None:
+                num = _parse_number(value, suffix_strip="cC")
+                if num is not None:
+                    return num
+        best: float | None = None
+        for child in node.get("Children", []) or []:
+            result = LhmGpuReader._find_temperature(child, prefix)
+            if result is not None and (best is None or result > best):
+                best = result
+        return best
+
     @staticmethod
     def _find_power(node: dict, prefix: str) -> float | None:
         """Deep search under `node` for the first Power sensor."""
@@ -221,6 +264,9 @@ def _parse_number(value: Any, *, suffix_strip: str = "") -> float | None:
         keep.append(ch)
     cleaned = "".join(keep).strip()
     cleaned = cleaned.replace(",", "")
+    # Drop any trailing non-numeric residue (e.g. the degree symbol in
+    # "45.0 °C" after stripping "c") so float() can parse the number.
+    cleaned = cleaned.rstrip("°º ")
     try:
         return float(cleaned)
     except (TypeError, ValueError):

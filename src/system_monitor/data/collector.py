@@ -98,6 +98,11 @@ class Collector:
         cpu_temp = self._cpu_temp.read()
         if cpu_temp is not None:
             cpu_stats["temp_c"] = cpu_temp["cpu_temp_c"]
+        else:
+            # WMI ACPI path unavailable/bogus — fall back to LHM (if running).
+            lhm_temp = self._gpu.read_cpu_temp_c()
+            if lhm_temp is not None:
+                cpu_stats["temp_c"] = round(lhm_temp, 1)
 
         disk_stats = disk_mod.snapshot(self._prev_disk)
         self._prev_disk = disk_stats

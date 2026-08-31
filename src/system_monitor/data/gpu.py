@@ -73,6 +73,12 @@ class GpuCollector:
             return self._lhm.read_cpu_power_w()
         return None
 
+    def read_cpu_temp_c(self) -> float | None:
+        """Return CPU package temperature in Celsius from LHM, or None."""
+        if self._lhm is not None:
+            return self._lhm.read_cpu_temp_c()
+        return None
+
     def snapshot(self) -> list[dict[str, Any]]:
         # Read LHM once for all adapters (single HTTP fetch).
         lhm_by_vendor: dict[str, list[dict[str, Any]]] = {}
