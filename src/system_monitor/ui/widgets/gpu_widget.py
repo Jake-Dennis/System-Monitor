@@ -101,10 +101,23 @@ class _GpuRow(QWidget):
         row2.addWidget(self._vram_pct)
         root.addLayout(row2)
 
-        # Row 3: details (power, fan, VRAM size text)
+        # Row 3: temp badge + details (power, fan, VRAM size text)
+        row3 = QHBoxLayout()
+        row3.setContentsMargins(0, 0, 0, 0)
+        row3.setSpacing(8)
+
+        self._temp_badge = QLabel("—")
+        self._temp_badge.setObjectName("TempBadge")
+        self._temp_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._temp_badge.setFixedHeight(22)
+        self._temp_badge.setMinimumWidth(52)
+
         self._details = QLabel("")
         self._details.setObjectName("Secondary")
-        root.addWidget(self._details)
+
+        row3.addWidget(self._temp_badge)
+        row3.addWidget(self._details, 1)
+        root.addLayout(row3)
 
         # Row 4: util timeline
         self._timeline = Timeline()
@@ -152,15 +165,12 @@ class _GpuRow(QWidget):
             self._vram_pct.setText("--")
             self._vram_bar.setValue(0)
 
-        # Detail line: power · fan · VRAM size · temp
+        # Detail line: power · fan · VRAM size
         parts: list[str] = []
         if mem_total > 0:
             parts.append(f"{mem_used:.0f}/{mem_total:.0f} MB")
         elif mem_total == 0 and mem_used == 0:
             parts.append("VRAM n/a")
-        temp = gpu.get("temp_c")
-        if temp is not None:
-            parts.append(f"{float(temp):.0f}°C")
         power = gpu.get("power_w")
         if power is not None:
             parts.append(f"{float(power):.0f} W")
@@ -168,6 +178,14 @@ class _GpuRow(QWidget):
         if fan is not None:
             parts.append(f"fan {float(fan):.0f}%")
         self._details.setText("   ·   ".join(parts) if parts else "")
+
+        # Temperature badge
+        temp = gpu.get("temp_c")
+        if temp is not None:
+            self._temp_badge.setText(f"{float(temp):.0f}°C")
+        else:
+            self._temp_badge.setText("—")
+        self._temp_badge.setStyleSheet(styles.temp_badge_style(temp))
 
         # Timeline
         self._timeline.set_color(color)
