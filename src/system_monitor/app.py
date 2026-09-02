@@ -5,7 +5,7 @@ import logging
 import sys
 from typing import Any
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -46,6 +46,16 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv
 
     cfg = config_mod.load()
+
+    # Single-instance guard: two instances writing config.json would clobber
+    # each other's settings (the last one to close wins with stale data).
+    # Default stale-lock time (30s) lets a crashed instance's lock be
+    # reclaimed; a live holder PID keeps the lock indefinitely.
+    config_mod.config_dir().mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(config_mod.config_dir() / "app.lock"))
+    if not lock.tryLock(100):
+        print("System Monitor is already running.", file=sys.stderr)
+        return 0
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

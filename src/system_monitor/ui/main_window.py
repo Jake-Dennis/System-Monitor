@@ -559,6 +559,9 @@ class MainWindow(QMainWindow):
                 if card is not None:
                     card.hide()
 
+        # Swap visibility is a RAM-card sub-feature, not a card of its own.
+        self._ram.set_show_swap(bool(self._config.get("ui", {}).get("show_swap", True)))
+
         # Taskbar thumbnail toolbar (Windows media controls).
         try:
             self._taskbar_media = TaskbarMediaController(int(self.winId()))
@@ -632,6 +635,7 @@ class MainWindow(QMainWindow):
         win["locked"] = not bool(win.get("locked", False))
         self._header.set_locked(bool(win["locked"]))
         self._drag_mgr.set_locked(bool(win["locked"]))
+        self._save_position()
 
     def _install_shortcuts(self) -> None:
         from PySide6.QtGui import QKeySequence, QShortcut
@@ -1128,6 +1132,7 @@ class MainWindow(QMainWindow):
                 self._config.setdefault("ui", {}).__setitem__(
                     f"show_{n.lower().replace(' ', '_')}", checked
                 ),
+                self._save_position(),
             )
         )
 
@@ -1231,16 +1236,19 @@ class MainWindow(QMainWindow):
         cfg = self._config.setdefault("ui", {})
         cfg["show_gpu"] = not bool(cfg.get("show_gpu", True))
         self._gpu.setVisible(bool(cfg["show_gpu"]))
+        self._save_position()
 
     def _toggle_show_network(self) -> None:
         cfg = self._config.setdefault("ui", {})
         cfg["show_network"] = not bool(cfg.get("show_network", True))
         self._net.setVisible(bool(cfg["show_network"]))
+        self._save_position()
 
     def _toggle_show_swap(self) -> None:
         cfg = self._config.setdefault("ui", {})
         cfg["show_swap"] = not bool(cfg.get("show_swap", True))
         self._ram.set_show_swap(bool(cfg["show_swap"]))
+        self._save_position()
 
     def _toggle_autostart(self) -> None:
         on = not self._config.get("window", {}).get("autostart", False)
