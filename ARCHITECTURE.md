@@ -85,6 +85,12 @@ in `try/except` and returns `None` or `0.0` on failure.
   otherwise), then loops calling `_collect_once()` which assembles a flat
   dict from every sensor and calls the registered callback. Keeps
   `_prev_disk`/`_prev_net` across ticks for rate computation.
+  `self.interval` is re-read every iteration, so changing
+  `collector.interval_seconds` takes effect on the next tick with no restart.
+  Each sensor is probed individually: one raising subsystem degrades only its
+  own section to an empty reading and is recorded in `snapshot["health"]`
+  (`{"cpu": "ok", "memory": "error", ...}`). The panel header renders failing
+  subsystems, so a broken sensor is never mistaken for an idle one.
 - **`cpu.py`**: Wraps `psutil.cpu_percent()`, `cpu_freq()`, `cpu_count()`.
   Returns percent, per-core list, frequency, model name (from WMI
   `Win32_Processor.Name` with fallback to `platform.processor()`).
@@ -113,11 +119,51 @@ in `try/except` and returns `None` or `0.0` on failure.
 
 ### 4. Media Detection & Control
 
-- **`media.py`**: Sends media keys (play/pause/next/prev) via
-  `ctypes.windll.user32.keybd_event`. Detects currently playing media by
-  scanning window titles of known players (Spotify, Chrome, VLC, etc.)
-  via `win32gui.EnumWindows`. Parses "Artist – Title" patterns from window
-  titles. Returns title, artist, app name.
+- **`media.py`**: Owns all media state. Wraps the Windows SMTC pipeline
+  (`GlobalSystemMediaTransportControlsSessionManager`) through `winrt`, run as
+  an asyncio session on a daemon thread and exposed synchronously. Reads real
+  metadata (title, artist, album, source app, playback status, position) from
+  whichever app currently holds the SMTC session — Spotify, Chrome, Edge, etc.
+  `now_playing()` and `play_pause()` / `next_track()` / `prev_track()` are the
+  whole public surface; `dispatch(cmd_id)` maps the taskbar toolbar's button
+  ids onto them.
+  **Correction:** this section previously described window-title scanning via
+  `win32gui.EnumWindows` and `keybd_event`. That was true of an earlier
+  revision; the code has used SMTC since. `media.py` contains no `win32gui`
+  and no `keybd_event` — the `keybd_event` path now lives only in
+  `ui/taskbar_media.py`'s icon drawing neighbourhood, not in the data layer.
+- **Media players only.** Browsers publish an SMTC session for any page with a
+  `<video>`, so they show up in `get_sessions()` next to real players. They are
+  excluded via `_BROWSER_APPS` / `is_media_player()`: browser media has no skip
+  support, so half the transport buttons would be permanently dead. Dedicated
+  players — Spotify, VLC, foobar2000, AIMP, MusicBee, local Jellyfin clients —
+  are all included, and the set is matched on the normalized app id so paths,
+  `.exe` and packaged-app hash suffixes don't matter.
+- **Session targeting.** Windows exposes a single "current" SMTC session, so
+  with two players playing there is no way to choose. The module enumerates
+  `manager.get_sessions()`, sorts playing-first, and lets the user pin a
+  target with `set_target(app_id)`; `MediaCard` opens that picker when you
+  click the track label. A pinned app that stops publishing a session is
+  dropped automatically rather than leaving the panel stuck.
+- **Commands follow the card.** Play/pause/next/prev resolve in the order
+  explicit arg → user pin → `_active` (whatever the card is currently showing)
+  → Windows' current session. Without that fallback chain the buttons could
+  steer a different app than the one on screen.
+- **Capability reporting.** Each session exposes
+  `playback_info.controls.is_next_enabled` / `is_previous_enabled` /
+  `is_play_pause_toggle_enabled`. Players vary here too (a web-focused player
+  may not skip), so the card disables prev/next rather than offering buttons
+  that silently do nothing.
+- **Packaging caveat:** the `winrt-*` distributions are published per Windows
+  API contract and do **not** declare each other as dependencies. Listing only
+  `winrt-Windows.Media.Control` installs cleanly and then raises
+  `ModuleNotFoundError: winrt.windows.foundation` the first time the manager is
+  awaited. `requirements.txt` and `depcheck.OPTIONAL` therefore list the
+  Foundation/Collections pieces too.
+- Sampling happens on the **collector thread**, once per interval, and arrives
+  in the snapshot as `snapshot["media"]`. `MediaCard.update()` reads that
+  value. It used to call `now_playing()` itself, which blocks on the SMTC
+  async call for up to 3s — on a 10Hz repaint timer.
 
 ### 5. UI Theme & Styles
 
@@ -143,6 +189,27 @@ in `try/except` and returns `None` or `0.0` on failure.
     hosts a single detached card. Drag-to-move via mouse events. Reattach
     button (⤵) sends the card back to the main panel. Position and state
     saved/restored across sessions.
+
+  `main_window.py` used to be a 1296-line god object that bridged 12
+  communities in the code graph. It is now the orchestrator only; the leaf
+  logic moved to siblings in the same package:
+  - **`cards.py`**: the single card registry — display name, widget attribute
+    and config key per card, plus `resolve_order()` which sanitizes a saved
+    `card_order` (stale disk labels dropped, missing cards appended) so a
+    hand-edited or out-of-date config can never hide a card.
+  - **`menus.py`**: context and settings menu construction. Every action calls
+    an intent-level `MainWindow` method (`_set_card_visible`, `_set_interval`,
+    …). The old code wrote `config["ui"][key] = checked` inside a lambda and
+    relied on a later `_save_position()` in the same tuple — which is how
+    per-drive visibility ended up never being persisted at all.
+  - **`appbar.py`**: `AppBarController`, holding the AppBar registration
+    state. The same `APPBARDATA` ctypes struct was previously declared three
+    times inside `MainWindow`, and the negotiate-then-commit shell dance
+    existed in two copies.
+  - **`autostart.py`**: startup-shortcut create/remove, no Qt dependency.
+  - **`styles.py`**: also owns the runtime accent (`set_accent` /
+    `current_accent` / `normalize_accent`), so `color_for_percent()` picks up
+    the configured accent without threading it through every card.
 - **`widgets/_base.py`**: **`_Card`** — base class for all metric cards.
   Provides title (`QLabel`), progress bar (`QProgressBar`, fixed 6px height),
   and secondary text. **Hover effect** via `setProperty("hovered", bool)` +
@@ -176,10 +243,12 @@ in `try/except` and returns `None` or `0.0` on failure.
 - **`taskbar_media.py`**: Adds media control buttons to the Windows taskbar
   thumbnail preview via `ITaskbarList3::ThumbBarAddButtons` (COM interface
   via `ctypes`). Icons created via `win32gui` geometric drawing. Button
-  clicks dispatched via `WM_COMMAND` / `THBN_CLICKED` in `nativeEvent`.
+  clicks arrive via `WM_COMMAND` / `THBN_CLICKED` in `nativeEvent` and are
+  forwarded to `media.dispatch(cmd_id)` — the command ids live in the data
+  layer, so this module only deals in pixels and window messages.
 - **System tray icon** (in `app.py`): `QSystemTrayIcon` with context menu:
-  Previous, Play/Pause, Next, track info, Quit. Updates every 100ms.
-  Dispatches media key commands.
+  Previous, Play/Pause, Next, track info, Quit. Refreshes every 100ms from
+  `bridge.latest["media"]` rather than querying SMTC itself.
 
 ### 8. Config Persistence
 
@@ -432,7 +501,7 @@ graph TB
     end
 
     subgraph "Media"
-        media["media.py<br/>window title scan<br/>+ media keys"]
+        media["media.py<br/>winrt SMTC session<br/>+ command dispatch"]
     end
 
     subgraph "UI Theme"
