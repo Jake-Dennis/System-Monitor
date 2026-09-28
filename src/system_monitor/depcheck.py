@@ -34,7 +34,14 @@ REQUIRED: dict[str, str] = {
 OPTIONAL: dict[str, str] = {
     "pynvml": "nvidia-ml-py",   # NVIDIA GPU
     "wmi": "wmi",               # DXGI adapter enumeration, AMD/Intel
-    "winrt.windows.media.control": "winrt-Windows.Media.Control",  # SMTC media controls
+    # SMTC media controls. The winrt-* distributions are per-API-contract and
+    # do not depend on each other, so probing only for Media.Control reports
+    # "fine" while the first awaited manager call dies on a missing
+    # winrt.windows.foundation. Probe the pieces that are actually imported
+    # at runtime, and install them together.
+    "winrt.windows.media.control": "winrt-Windows.Media.Control",
+    "winrt.windows.foundation": "winrt-Windows.Foundation",
+    "winrt.windows.foundation.collections": "winrt-Windows.Foundation.Collections",
 }
 
 

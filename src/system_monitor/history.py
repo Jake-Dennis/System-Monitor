@@ -24,14 +24,36 @@ _BUFFER_SIZE = 600  # ~10 minutes at 1 Hz
 _FLUSH_INTERVAL = 30  # seconds
 
 
+def history_dir() -> Path:
+    """Directory the CSVs are written to."""
+    return Path(os.environ.get("APPDATA", str(Path.home()))) / "SystemMonitor" / "history"
+
+
+def reveal_history() -> bool:
+    """Open the history folder in the shell, creating it if needed.
+
+    The recorder has always written CSVs that nothing in the UI could reach.
+    Returns False if the folder could not be opened.
+    """
+    path = history_dir()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log.warning("could not create history dir %s", path, exc_info=True)
+        return False
+    try:
+        os.startfile(str(path))  # noqa: S606 - Windows shell open is the point
+    except (OSError, AttributeError):
+        log.warning("could not open history dir %s", path, exc_info=True)
+        return False
+    return True
+
+
 class HistoryRecorder:
     """Background-thread CSV recorder for snapshots."""
 
     def __init__(self, base_dir: Path | None = None) -> None:
-        self._base_dir = base_dir or (
-            Path(os.environ.get("APPDATA", str(Path.home())))
-            / "SystemMonitor" / "history"
-        )
+        self._base_dir = base_dir or history_dir()
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=_BUFFER_SIZE)
         self._stop = threading.Event()
         self._thread = threading.Thread(

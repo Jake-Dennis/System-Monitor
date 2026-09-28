@@ -11,12 +11,32 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import config as config_mod
 from .data.collector import Collector
-from .data.media import play_pause, next_track, prev_track, now_playing
+from .data.media import next_track, play_pause, prev_track
 from .ui import styles
 from .ui.main_window import MainWindow
 
 
 log = logging.getLogger(__name__)
+
+
+def _acquire_instance_lock(config_dir, timeout_ms: int = 100):
+    """Try to take the single-instance lock in `config_dir`.
+
+    Returns the QLockFile on success, or None if another live instance holds
+    it. The config dir is created first: on a clean machine it doesn't exist
+    yet, and QLockFile would fail with an opaque OSError.
+
+    Default stale-lock time (30s) lets a crashed instance's lock be reclaimed;
+    a live holder PID keeps the lock indefinitely.
+    """
+    from pathlib import Path
+
+    path = Path(config_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(path / "app.lock"))
+    if not lock.tryLock(timeout_ms):
+        return None
+    return lock
 
 
 class _Bridge(QObject):
@@ -49,11 +69,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Single-instance guard: two instances writing config.json would clobber
     # each other's settings (the last one to close wins with stale data).
-    # Default stale-lock time (30s) lets a crashed instance's lock be
-    # reclaimed; a live holder PID keeps the lock indefinitely.
-    config_mod.config_dir().mkdir(parents=True, exist_ok=True)
-    lock = QLockFile(str(config_mod.config_dir() / "app.lock"))
-    if not lock.tryLock(100):
+    lock = _acquire_instance_lock(config_mod.config_dir(), 100)
+    if lock is None:
         print("System Monitor is already running.", file=sys.stderr)
         return 0
 
@@ -61,7 +78,8 @@ def main(argv: list[str] | None = None) -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(argv)
-    app.setStyleSheet(styles.qss(1.0, theme=cfg.get("ui", {}).get("theme", "dark")))
+    accent = styles.set_accent(cfg.get("ui", {}).get("accent", styles.ACCENT))
+    app.setStyleSheet(styles.qss(1.0, theme=cfg.get("ui", {}).get("theme", "dark"), accent=accent))
     app.setQuitOnLastWindowClosed(True)
 
     window = MainWindow(cfg)
@@ -73,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
 
     interval = float(cfg.get("collector", {}).get("interval_seconds", 1.0))
     collector = Collector(interval=interval)
+    # The collector re-reads self.interval each loop, so a settings change
+    # takes effect on the next tick without restarting the thread.
+    window.interval_changed.connect(lambda secs: setattr(collector, "interval", secs))
 
     # History recorder: writes snapshots to daily CSVs under %APPDATA%.
     from .history import HistoryRecorder
@@ -95,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     tray_pix = QPixmap(16, 16)
     tray_pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(tray_pix)
-    painter.setBrush(styles.ACCENT)
+    painter.setBrush(QColor(accent))
     painter.setPen(Qt.PenStyle.NoPen)
     # Draw a small filled circle
     painter.drawEllipse(2, 2, 12, 12)
@@ -104,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     tray.setToolTip("System Monitor")
 
     tray_menu = QMenu()
-    tray_menu.setStyleSheet(styles.qss(1.0))
+    tray_menu.setStyleSheet(styles.qss(1.0, accent=styles.current_accent()))
 
     tray_prev = QAction("⏮  Previous", tray_menu)
     tray_prev.triggered.connect(prev_track)
@@ -140,8 +161,10 @@ def main(argv: list[str] | None = None) -> int:
     tray.show()
 
     # Update the tray tooltip and track info on each repaint timer tick.
+    # Read from the latest snapshot rather than calling now_playing(): that
+    # blocks on the SMTC async call, and this timer fires 10x a second.
     def _update_tray() -> None:
-        media = now_playing()
+        media = (bridge.latest or {}).get("media") or {}
         if media.get("is_active"):
             title = media.get("title", "")
             artist = media.get("artist", "")

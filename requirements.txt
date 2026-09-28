@@ -3,4 +3,14 @@ psutil>=5.9
 nvidia-ml-py>=7.352
 wmi>=1.5.1; sys_platform == "win32"
 pywin32>=306; sys_platform == "win32"
+
+# SMTC media control (Spotify, Edge/Chrome/Firefox video, ...).
+# The winrt-* packages are split per Windows API contract and do NOT declare
+# each other, so listing only Media.Control yields a ModuleNotFoundError for
+# winrt.windows.foundation the first time the SMTC manager is awaited.
 winrt-Windows.Media.Control>=3.2
+winrt-Windows.Foundation>=3.2
+winrt-Windows.Foundation.Collections>=3.2
+winrt-Windows.Foundation.Numerics>=3.2
+winrt-Windows.Globalization>=3.2
+winrt-Windows.System>=3.2

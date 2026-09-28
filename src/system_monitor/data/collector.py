@@ -14,6 +14,7 @@ from typing import Any
 from . import cpu as cpu_mod
 from . import disk as disk_mod
 from . import gpu as gpu_mod
+from . import media as media_mod
 from . import memory as mem_mod
 from . import network as net_mod
 
@@ -86,19 +87,53 @@ class Collector:
         self._on_snapshot = callback
 
     def _collect_once(self) -> dict[str, Any]:
-        cpu_stats = self._cpu.snapshot()
-        gpus = self._gpu.snapshot()
+        # Each sensor is isolated: one raising subsystem degrades its own
+        # section to an empty reading and is reported in "health", instead of
+        # taking down the whole snapshot.
+        health: dict[str, str] = {}
 
-        disk_stats = disk_mod.snapshot(self._prev_disk)
+        def probe(name: str, fn, *args, fallback):
+            try:
+                return fn(*args), "ok"
+            except Exception:
+                log.warning("sensor %s failed", name, exc_info=True)
+                health[name] = "error"
+                return fallback, "error"
+
+        cpu_stats, cpu_health = probe("cpu", self._cpu.snapshot, fallback={})
+        gpus, gpu_health = probe("gpu", self._gpu.snapshot, fallback=[])
+        health["cpu"] = cpu_health
+        health["gpu"] = gpu_health
+
+        disk_stats, disk_health = probe(
+            "disk", disk_mod.snapshot, self._prev_disk, fallback={"per_disk": []}
+        )
         self._prev_disk = disk_stats
-        net_stats = net_mod.snapshot(self._prev_net)
+        health["disk"] = disk_health
+
+        net_stats, net_health = probe(
+            "network", net_mod.snapshot, self._prev_net, fallback={"pernic": {}}
+        )
         self._prev_net = net_stats
+        health["network"] = net_health
+
+        mem_stats, mem_health = probe("memory", mem_mod.snapshot, fallback={})
+        health["memory"] = mem_health
+
+        # Media is sampled here, on the collector thread, rather than in the
+        # card: now_playing() blocks on the SMTC async call (3s timeout), and
+        # the card used to call it on every 10 Hz repaint.
+        media_stats, media_health = probe("media", media_mod.now_playing, fallback={})
+        health["media"] = media_health
 
         return {
             "timestamp": time.time(),
             "cpu": cpu_stats,
-            "memory": mem_mod.snapshot(),
+            "memory": mem_stats,
             "disks": disk_stats,
             "network": net_stats,
             "gpus": gpus,
+            "media": media_stats,
+            # Per-subsystem status so the UI can tell "idle" from "broken".
+            "health": health,
         }

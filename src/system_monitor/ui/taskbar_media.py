@@ -12,13 +12,15 @@ import logging
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QStyle
 
-from ..data.media import next_track, play_pause, prev_track
+from ..data import media as media_mod
 
 log = logging.getLogger(__name__)
 
-ID_PREV = 1001
-ID_PLAY = 1002
-ID_NEXT = 1003
+# Command ids come from the data layer so the panel, tray and taskbar all
+# speak the same vocabulary.
+ID_PREV = media_mod.CMD_PREV
+ID_PLAY = media_mod.CMD_PLAY
+ID_NEXT = media_mod.CMD_NEXT
 THBN_CLICKED = 0x1800
 
 # THUMBBUTTON structure
@@ -209,12 +211,9 @@ class TaskbarMediaController:
             log.warning("Taskbar setup error: %s", e)
 
     def handle_click(self, cmd_id: int) -> None:
-        if cmd_id == ID_PREV:
-            prev_track()
-        elif cmd_id == ID_PLAY:
-            play_pause()
-        elif cmd_id == ID_NEXT:
-            next_track()
+        # Dispatch lives in the data layer; this class only knows about pixels
+        # and window messages.
+        media_mod.dispatch(cmd_id)
 
     def cleanup(self) -> None:
         for h in self._icons:

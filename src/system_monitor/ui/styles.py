@@ -1,6 +1,8 @@
 """QSS theme engine — dark and light themes with dynamic font scaling."""
 from __future__ import annotations
 
+import re
+
 # -- base (unscaled) font sizes --
 BASE = {
     "HeaderTitle": 14,
@@ -20,6 +22,37 @@ ACCENT = "#00D4FF"
 WARN = "#FFB454"
 HOT = "#FF6B35"
 CRIT = "#FF3838"
+
+# Runtime accent. `ACCENT` is the compiled-in default; this is the value the
+# user has actually chosen (config `ui.accent`). Widgets call
+# color_for_percent() without passing it, so it has to live here rather than
+# be threaded through every card.
+_current_accent = ACCENT
+
+_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def normalize_accent(value: object) -> str:
+    """Return a valid #RGB/#RRGGBB string, or the default accent.
+
+    `ui.accent` is user-editable, so a typo would otherwise produce an
+    invalid stylesheet and (in Qt's case) a silently unstyled panel.
+    """
+    if isinstance(value, str) and _HEX_RE.match(value.strip()):
+        return value.strip()
+    return ACCENT
+
+
+def set_accent(value: object) -> str:
+    """Set the runtime accent color. Returns the value actually applied."""
+    global _current_accent
+    _current_accent = normalize_accent(value)
+    return _current_accent
+
+
+def current_accent() -> str:
+    """The accent currently in effect."""
+    return _current_accent
 
 # -- theme palettes --
 _DARK = {
@@ -43,15 +76,22 @@ _LIGHT = {
 }
 
 
-def color_for_percent(p: float, *, hot_at: float = 70.0, crit_at: float = 90.0) -> str:
-    """Return a hex color for a 0-100 utilization reading."""
+def color_for_percent(
+    p: float, *, hot_at: float = 70.0, crit_at: float = 90.0, accent: str | None = None
+) -> str:
+    """Return a hex color for a 0-100 utilization reading.
+
+    `accent` overrides the runtime accent for this call only; omit it to use
+    the theme's current accent.
+    """
+    base = normalize_accent(accent) if accent is not None else _current_accent
     if p >= crit_at:
         return CRIT
     if p >= hot_at:
         return HOT
     if p >= hot_at * 0.7:
         return WARN
-    return ACCENT
+    return base
 
 
 def _sz(name: str, scale: float) -> int:
@@ -59,13 +99,16 @@ def _sz(name: str, scale: float) -> int:
     return max(1, round(BASE[name] * scale))
 
 
-def qss(scale: float = 1.0, theme: str = "dark") -> str:
+def qss(scale: float = 1.0, theme: str = "dark", accent: str | None = None) -> str:
     """Generate the QSS stylesheet with scaled fonts and chosen theme.
 
     `theme`: "dark" (default) or "light"
+    `accent`: overrides the runtime accent for this stylesheet only.
     """
+    accent_color = normalize_accent(accent) if accent is not None else _current_accent
     S = lambda name: _sz(name, scale)  # noqa: E731
     h_bar = S("ProgressBarH")
+
 
     pal = _DARK if theme == "dark" else _LIGHT
     BG_W = pal["BG_WINDOW"]
@@ -142,7 +185,7 @@ QWidget#Card {{
 }}
 QWidget#Card[hovered="true"] {{
     background-color: {BG_CH};
-    border: 1px solid {ACCENT};
+    border: 1px solid {accent_color};
 }}
 QWidget#Card[alert="warn"] {{
     border: 2px solid {ALERT_WARN};
@@ -171,7 +214,7 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{
     border-radius: 3px;
-    background: {ACCENT};
+    background: {accent_color};
 }}
 
 QScrollArea {{ background: transparent; border: none; }}
